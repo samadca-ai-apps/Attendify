@@ -4,7 +4,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, auth, secondaryAuth, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Class, Division, User, Student } from '../types';
-import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X } from 'lucide-react';
+import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X, ShieldCheck, UserCog } from 'lucide-react';
 import Papa from 'papaparse';
 
 export const Management: React.FC = () => {
@@ -107,6 +107,7 @@ export const Management: React.FC = () => {
     const name = formData.get('name') as string;
     const mobile = formData.get('mobile') as string;
     const password = formData.get('password') as string;
+    const role = formData.get('role') as string || 'teacher';
     if (!appUser || !name || !mobile || !password) return;
 
     try {
@@ -117,7 +118,7 @@ export const Management: React.FC = () => {
       await setDoc(doc(db, 'users', uid), {
         uid,
         schoolId: appUser.schoolId,
-        role: 'teacher',
+        role,
         name,
         mobile,
         status: 'active',
@@ -173,23 +174,59 @@ export const Management: React.FC = () => {
       header: true,
       complete: async (results) => {
         const batch = writeBatch(db);
+        let count = 0;
+        let skipped = 0;
+
         results.data.forEach((row: any) => {
-          if (!row.name || !row.admissionNumber || !row.classId || !row.divisionId) return;
+          if (!row.name || !row.admissionNumber || !row.className || !row.divisionName) {
+            skipped++;
+            return;
+          }
+
+          // Find class by name (case-insensitive)
+          const targetClass = classes.find(c => c.name.toLowerCase() === row.className.trim().toLowerCase());
+          if (!targetClass) {
+            skipped++;
+            return;
+          }
+
+          // Find division by name within that class (case-insensitive)
+          const targetDivision = divisions.find(d => 
+            d.classId === targetClass.classId && 
+            d.name.toLowerCase() === row.divisionName.trim().toLowerCase()
+          );
+
+          if (!targetDivision) {
+            skipped++;
+            return;
+          }
+
           const studentId = `STU-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
           const studentRef = doc(db, 'students', studentId);
           batch.set(studentRef, {
             studentId,
             schoolId: appUser.schoolId,
-            classId: row.classId,
-            divisionId: row.divisionId,
+            classId: targetClass.classId,
+            divisionId: targetDivision.divisionId,
             name: row.name,
             admissionNumber: row.admissionNumber,
             status: 'active'
           });
+          count++;
         });
-        await batch.commit();
-        setSuccess('Students uploaded successfully!');
-        fetchData();
+
+        if (count > 0) {
+          try {
+            await batch.commit();
+            setSuccess(`Successfully uploaded ${count} students!${skipped > 0 ? ` (${skipped} rows skipped due to invalid data)` : ''}`);
+            fetchData();
+          } catch (err) {
+            handleFirestoreError(err, OperationType.WRITE, 'bulk_student_upload');
+            setError('Failed to commit bulk upload.');
+          }
+        } else if (skipped > 0) {
+          setError(`Failed to upload students. ${skipped} rows had invalid class/division names or missing data.`);
+        }
       }
     });
   };
@@ -229,6 +266,26 @@ export const Management: React.FC = () => {
       fetchData();
     } catch (err) {
       setError('Failed to update student status.');
+    }
+  };
+
+  const handleUpdateTeacherRole = async (uid: string, newRole: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+      setSuccess('Teacher role updated successfully');
+      fetchData();
+    } catch (err) {
+      setError('Failed to update teacher role');
+    }
+  };
+
+  const handleUpdateDivisionTeacher = async (divisionId: string, teacherId: string) => {
+    try {
+      await updateDoc(doc(db, 'divisions', divisionId), { teacherId });
+      setSuccess('Division teacher updated successfully');
+      fetchData();
+    } catch (err) {
+      setError('Failed to update division teacher');
     }
   };
 
@@ -344,6 +401,10 @@ export const Management: React.FC = () => {
                 <input name="name" required placeholder="Full Name" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
                 <input name="mobile" required placeholder="Mobile Number (Login ID)" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
                 <input name="password" required type="password" placeholder="Default Password" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                <select name="role" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
+                  <option value="teacher">Teacher</option>
+                  <option value="it_coordinator">IT Coordinator</option>
+                </select>
                 <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
                   <UserPlus className="h-4 w-4" /> Create Account
                 </button>
@@ -390,7 +451,7 @@ export const Management: React.FC = () => {
                   <input type="file" accept=".csv" onChange={handleCsvUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                   <FileSpreadsheet className="h-10 w-10 text-gray-400 mx-auto mb-4" />
                   <p className="text-sm font-medium text-gray-900">Click to upload CSV</p>
-                  <p className="text-xs text-gray-500 mt-1">Format: name, admissionNumber, classId, divisionId</p>
+                  <p className="text-xs text-gray-500 mt-1">Format: name, admissionNumber, className, divisionName</p>
                 </div>
               </div>
             </div>
@@ -475,11 +536,21 @@ export const Management: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {divisions.filter(d => d.classId === cls.classId).map(div => (
                       <div key={div.divisionId} className="bg-gray-50 p-4 rounded-xl flex items-center justify-between">
-                        <div>
+                        <div className="flex-1">
                           <p className="font-bold text-gray-900">Division {div.name}</p>
-                          <p className="text-xs text-gray-500">
-                            Teacher: {teachers.find(t => t.uid === div.teacherId)?.name || 'Unassigned'}
-                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-xs text-gray-500">Teacher:</p>
+                            <select
+                              value={div.teacherId || ''}
+                              onChange={(e) => handleUpdateDivisionTeacher(div.divisionId, e.target.value)}
+                              className="text-xs bg-transparent border-none focus:ring-0 p-0 font-medium text-blue-600 cursor-pointer hover:underline"
+                            >
+                              <option value="">Unassigned</option>
+                              {teachers.map(t => (
+                                <option key={t.uid} value={t.uid}>{t.name}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
                         <button onClick={() => {
                           setConfirmModal({
@@ -513,11 +584,25 @@ export const Management: React.FC = () => {
                       {teacher.name.charAt(0)}
                     </div>
                     <div>
-                      <p className="font-bold text-gray-900">{teacher.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-gray-900">{teacher.name}</p>
+                        {teacher.role === 'it_coordinator' && (
+                          <ShieldCheck className="h-4 w-4 text-blue-600" title="IT Coordinator" />
+                        )}
+                      </div>
                       <p className="text-xs text-gray-500">{teacher.mobile}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-4">
+                    <select
+                      value={teacher.role}
+                      onChange={(e) => handleUpdateTeacherRole(teacher.uid, e.target.value)}
+                      className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 focus:ring-1 focus:ring-blue-500 outline-none"
+                    >
+                      <option value="teacher">Teacher</option>
+                      <option value="it_coordinator">IT Coordinator</option>
+                    </select>
+                    <div className="flex items-center gap-2">
                     <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${teacher.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                       {teacher.status}
                     </span>
@@ -542,7 +627,8 @@ export const Management: React.FC = () => {
                     </button>
                   </div>
                 </div>
-              ))}
+              </div>
+            ))}
 
               {activeTab === 'students' && students.map(student => (
                 <div key={student.studentId} className="p-6 flex items-center justify-between">

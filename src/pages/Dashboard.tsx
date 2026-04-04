@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, limit, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, limit, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Attendance, Student, Class, Division } from '../types';
@@ -13,6 +13,7 @@ export const Dashboard: React.FC = () => {
     totalClasses: 0,
     avgAttendance: 0,
     recentAttendance: [] as Attendance[],
+    chartData: [] as { date: string, present: number }[],
   });
   const [loading, setLoading] = useState(true);
 
@@ -43,40 +44,66 @@ export const Dashboard: React.FC = () => {
         const classesSnap = await getDocs(classesQuery);
         const totalClasses = classesSnap.size;
 
-        // 3. Recent Attendance
-        const attendanceQuery = query(
-          collection(db, 'attendance'),
-          where('schoolId', '==', schoolId),
-          orderBy('date', 'desc'),
-          limit(7)
-        );
-        const attendanceSnap = await getDocs(attendanceQuery);
-        const recentAttendance = attendanceSnap.docs.map(doc => doc.data() as Attendance);
-
-        // 4. Avg Attendance
-        let avgAttendance = 0;
-        if (recentAttendance.length > 0) {
-          const totalPresent = recentAttendance.reduce((acc, curr) => {
-            const presentCount = curr.records.filter(r => r.status === 'present').length;
-            return acc + (presentCount / curr.records.length);
-          }, 0);
-          avgAttendance = Math.round((totalPresent / recentAttendance.length) * 100);
-        }
-
-        setStats({
-          totalStudents,
-          totalClasses,
-          avgAttendance,
-          recentAttendance: recentAttendance.reverse(),
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'dashboard_stats');
-      } finally {
-        setLoading(false);
+        setStats(prev => ({ ...prev, totalStudents, totalClasses }));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, 'dashboard_static_stats');
       }
     };
 
     fetchStats();
+
+    // 3. Real-time Attendance
+    const attendanceQuery = query(
+      collection(db, 'attendance'),
+      where('schoolId', '==', appUser.schoolId),
+      orderBy('date', 'desc'),
+      limit(30) // Fetch more to aggregate by date
+    );
+
+    const unsubscribe = onSnapshot(attendanceQuery, (snapshot) => {
+      const allRecent = snapshot.docs.map(doc => doc.data() as Attendance);
+      
+      // Aggregate by date for chart
+      const aggregatedByDate: Record<string, { present: number, total: number }> = {};
+      
+      allRecent.forEach(record => {
+        if (!aggregatedByDate[record.date]) {
+          aggregatedByDate[record.date] = { present: 0, total: 0 };
+        }
+        const presentCount = record.records.filter(r => r.status === 'present').length;
+        aggregatedByDate[record.date].present += presentCount;
+        aggregatedByDate[record.date].total += record.records.length;
+      });
+
+      const sortedDates = Object.keys(aggregatedByDate).sort().reverse();
+      const latestDates = sortedDates.slice(0, 7);
+      
+      const chartData = latestDates.map(date => ({
+        date,
+        present: Math.round((aggregatedByDate[date].present / aggregatedByDate[date].total) * 100)
+      })).reverse();
+
+      // Calculate average attendance from all fetched records
+      let avgAttendance = 0;
+      if (allRecent.length > 0) {
+        const totalPresent = allRecent.reduce((acc, curr) => acc + curr.records.filter(r => r.status === 'present').length, 0);
+        const totalStudents = allRecent.reduce((acc, curr) => acc + curr.records.length, 0);
+        avgAttendance = Math.round((totalPresent / totalStudents) * 100);
+      }
+
+      setStats(prev => ({
+        ...prev,
+        avgAttendance,
+        recentAttendance: allRecent.slice(0, 7),
+        chartData
+      }));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'dashboard_attendance_stream');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [appUser]);
 
   if (loading) {
@@ -87,10 +114,7 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  const chartData = stats.recentAttendance.map(a => ({
-    date: a.date,
-    present: Math.round((a.records.filter(r => r.status === 'present').length / a.records.length) * 100),
-  }));
+  const chartData = stats.chartData || [];
 
   const COLORS = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981'];
 

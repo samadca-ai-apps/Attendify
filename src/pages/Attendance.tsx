@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, addDoc, serverTimestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Student, Class, Division, Attendance, AttendanceRecord } from '../types';
@@ -15,6 +15,7 @@ export const AttendancePage: React.FC = () => {
   const [selectedDivision, setSelectedDivision] = useState<string>('');
   const [students, setStudents] = useState<Student[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecord>>({});
+  const [existingAttendanceId, setExistingAttendanceId] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
@@ -54,32 +55,65 @@ export const AttendancePage: React.FC = () => {
   useEffect(() => {
     if (!selectedDivision) return;
 
-    const fetchStudents = async () => {
+    const fetchStudentsAndAttendance = async () => {
       setLoading(true);
       try {
-        const studentsSnap = await getDocs(query(
-          collection(db, 'students'),
-          where('divisionId', '==', selectedDivision),
-          where('status', '==', 'active')
-        ));
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const schoolId = appUser.schoolId;
+        
+        // 1. Fetch Students and Existing Attendance in parallel
+        const [studentsSnap, attendanceSnap] = await Promise.all([
+          getDocs(query(
+            collection(db, 'students'),
+            where('schoolId', '==', schoolId),
+            where('divisionId', '==', selectedDivision),
+            where('status', '==', 'active')
+          )),
+          getDocs(query(
+            collection(db, 'attendance'),
+            where('schoolId', '==', schoolId),
+            where('divisionId', '==', selectedDivision),
+            where('date', '==', today)
+          ))
+        ]);
+
         const studentsData = studentsSnap.docs.map(doc => doc.data() as Student);
         setStudents(studentsData);
 
-        // Initialize records
-        const initialRecords: Record<string, AttendanceRecord> = {};
-        studentsData.forEach(s => {
-          initialRecords[s.studentId] = { studentId: s.studentId, status: 'present' };
-        });
-        setAttendanceRecords(initialRecords);
+        if (!attendanceSnap.empty) {
+          const existingData = attendanceSnap.docs[0].data() as Attendance;
+          setExistingAttendanceId(attendanceSnap.docs[0].id);
+          
+          const records: Record<string, AttendanceRecord> = {};
+          existingData.records.forEach(r => {
+            records[r.studentId] = r;
+          });
+          
+          // Fill in any missing students (if new students were added after attendance was taken)
+          studentsData.forEach(s => {
+            if (!records[s.studentId]) {
+              records[s.studentId] = { studentId: s.studentId, status: 'present' };
+            }
+          });
+          
+          setAttendanceRecords(records);
+        } else {
+          setExistingAttendanceId(null);
+          const initialRecords: Record<string, AttendanceRecord> = {};
+          studentsData.forEach(s => {
+            initialRecords[s.studentId] = { studentId: s.studentId, status: 'present' };
+          });
+          setAttendanceRecords(initialRecords);
+        }
       } catch (error) {
-        handleFirestoreError(error, OperationType.LIST, 'attendance_students');
+        handleFirestoreError(error, OperationType.LIST, 'attendance_fetch_all');
       } finally {
         setLoading(false);
       }
     };
 
-    fetchStudents();
-  }, [selectedDivision]);
+    fetchStudentsAndAttendance();
+  }, [selectedDivision, appUser]);
 
   const handleStatusChange = (studentId: string, status: AttendanceRecord['status']) => {
     setAttendanceRecords(prev => ({
@@ -104,17 +138,23 @@ export const AttendancePage: React.FC = () => {
       const division = divisions.find(d => d.divisionId === selectedDivision);
       if (!division) return;
 
-      const attendanceData: Omit<Attendance, 'attendanceId'> = {
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const attendanceId = existingAttendanceId || `${appUser.schoolId}_${selectedDivision}_${today}`;
+
+      const attendanceData: Attendance = {
+        attendanceId,
         schoolId: appUser.schoolId,
         classId: division.classId,
         divisionId: selectedDivision,
-        date: format(new Date(), 'yyyy-MM-dd'),
+        date: today,
         records: Object.values(attendanceRecords),
         submittedBy: appUser.uid,
         timestamp: new Date().toISOString(),
       };
 
-      await addDoc(collection(db, 'attendance'), attendanceData);
+      await setDoc(doc(db, 'attendance', attendanceId), attendanceData);
+      
+      setExistingAttendanceId(attendanceId);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (error) {
@@ -246,7 +286,15 @@ export const AttendancePage: React.FC = () => {
               <div className="bg-gray-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Users className="h-8 w-8 text-gray-300" />
               </div>
-              <p className="text-gray-500">No students found in this division.</p>
+              {divisions.length === 0 ? (
+                <p className="text-gray-500">
+                  {appUser?.role === 'teacher' 
+                    ? "You are not assigned to any division. Please contact the administrator."
+                    : "No divisions found in the school. Please set up divisions in Management."}
+                </p>
+              ) : (
+                <p className="text-gray-500">No students found in this division.</p>
+              )}
             </div>
           )}
         </div>
