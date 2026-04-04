@@ -1,0 +1,5 @@
+{
+  "name": "Attendify",
+  "description": "A comprehensive multi-tenant school attendance management system with role-based access control and real-time reporting.",
+  "requestFramePermissions": []
+}

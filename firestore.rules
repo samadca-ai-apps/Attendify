@@ -1,0 +1,239 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: schools
+// Document ID: schoolId
+// Fields:
+//   - schoolId: string (required, immutable)
+//   - name: string (required)
+//   - address: string
+//   - contactPerson: string
+//   - mobile: string (required)
+//   - email: string
+//   - createdAt: timestamp (required)
+//
+// Collection: users
+// Document ID: uid
+// Fields:
+//   - uid: string (required, immutable)
+//   - schoolId: string (required, immutable)
+//   - role: string (required, enum: ['admin', 'it_coordinator', 'teacher'])
+//   - name: string (required)
+//   - mobile: string (required)
+//   - status: string (required, enum: ['active', 'inactive'])
+//   - firstLogin: bool (required)
+//
+// Collection: classes
+// Document ID: classId
+// Fields:
+//   - classId: string (required, immutable)
+//   - schoolId: string (required, immutable)
+//   - name: string (required)
+//
+// Collection: divisions
+// Document ID: divisionId
+// Fields:
+//   - divisionId: string (required, immutable)
+//   - schoolId: string (required, immutable)
+//   - classId: string (required, immutable)
+//   - name: string (required)
+//   - teacherId: string (optional)
+//
+// Collection: students
+// Document ID: studentId
+// Fields:
+//   - studentId: string (required, immutable)
+//   - schoolId: string (required, immutable)
+//   - classId: string (required, immutable)
+//   - divisionId: string (required, immutable)
+//   - name: string (required)
+//   - admissionNumber: string (required)
+//   - status: string (required, enum: ['active', 'pass-out'])
+//
+// Collection: attendance
+// Document ID: attendanceId
+// Fields:
+//   - attendanceId: string (required, immutable)
+//   - schoolId: string (required, immutable)
+//   - classId: string (required, immutable)
+//   - divisionId: string (required, immutable)
+//   - date: string (required, YYYY-MM-DD)
+//   - records: list (required, items: {studentId, status, note})
+//   - submittedBy: string (required, immutable)
+//   - timestamp: timestamp (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isSchoolMember(schoolId) {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+             (request.auth.token.email == "samadca@gmail.com" || 
+              request.auth.token.email.matches(".*@attendify\\.com$"));
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || hasRole('admin');
+    }
+
+    function isITCoordinator() {
+      return hasRole('it_coordinator');
+    }
+
+    function isTeacher() {
+      return hasRole('teacher');
+    }
+
+    function isStaff() {
+      return isAdmin() || isITCoordinator();
+    }
+
+    function isStaffInSchool(schoolId) {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId &&
+             (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || 
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'it_coordinator');
+    }
+
+    function isValidSchool(data) {
+      return data.schoolId is string && data.schoolId.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.mobile is string && data.mobile.size() >= 10 &&
+             data.createdAt is string;
+    }
+
+    function isValidUser(data) {
+      return data.uid is string && data.uid.size() > 0 &&
+             data.schoolId is string && data.schoolId.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.role in ['admin', 'it_coordinator', 'teacher'] &&
+             data.status in ['active', 'inactive'] &&
+             data.firstLogin is bool;
+    }
+
+    function isValidClass(data) {
+      return data.classId is string && data.classId.size() > 0 &&
+             data.schoolId is string && data.schoolId.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 50;
+    }
+
+    function isValidDivision(data) {
+      return data.divisionId is string && data.divisionId.size() > 0 &&
+             data.schoolId is string && data.schoolId.size() > 0 &&
+             data.classId is string && data.classId.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 50;
+    }
+
+    function isValidStudent(data) {
+      return data.studentId is string && data.studentId.size() > 0 &&
+             data.schoolId is string && data.schoolId.size() > 0 &&
+             data.classId is string && data.classId.size() > 0 &&
+             data.divisionId is string && data.divisionId.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.admissionNumber is string && data.admissionNumber.size() > 0 &&
+             data.status in ['active', 'pass-out'];
+    }
+
+    function isValidAttendance(data) {
+      return data.attendanceId is string && data.attendanceId.size() > 0 &&
+             data.schoolId is string && data.schoolId.size() > 0 &&
+             data.classId is string && data.classId.size() > 0 &&
+             data.divisionId is string && data.divisionId.size() > 0 &&
+             data.date is string && data.date.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") &&
+             data.records is list && data.records.size() > 0 &&
+             data.submittedBy is string &&
+             data.timestamp is string;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Schools
+    match /schools/{schoolId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (resource != null && resource.data.createdBy == request.auth.uid) ||
+        isSchoolMember(schoolId)
+      );
+      allow create: if isAuthenticated() && isValidSchool(request.resource.data); 
+      allow update: if isAuthenticated() && isSchoolMember(schoolId) && isAdmin() && isValidSchool(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Users
+    match /users/{uid} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == uid || 
+        isSuperAdmin() ||
+        (resource != null && isStaffInSchool(resource.data.schoolId))
+      );
+      allow create: if isAuthenticated() && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (
+        (request.auth.uid == uid && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid', 'schoolId', 'role'])) ||
+        (resource != null && isStaffInSchool(resource.data.schoolId))
+      );
+      allow delete: if isAuthenticated() && resource != null && isStaffInSchool(resource.data.schoolId) && isAdmin();
+    }
+
+    // Classes
+    match /classes/{classId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff() && isValidClass(request.resource.data);
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff() && isValidClass(request.resource.data);
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // Divisions
+    match /divisions/{divisionId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff() && isValidDivision(request.resource.data);
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff() && isValidDivision(request.resource.data);
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // Students
+    match /students/{studentId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff() && isValidStudent(request.resource.data);
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff() && isValidStudent(request.resource.data);
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // Attendance
+    match /attendance/{attendanceId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && (isTeacher() || isStaff()) && isValidAttendance(request.resource.data);
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && (isTeacher() || isStaff()) && isValidAttendance(request.resource.data);
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+  }
+}

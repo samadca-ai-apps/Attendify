@@ -1,0 +1,107 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "Represents a school registered in the system.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string", "description": "Unique ID for the school." },
+        "name": { "type": "string", "description": "Name of the school." },
+        "address": { "type": "string", "description": "Physical address of the school." },
+        "contactPerson": { "type": "string", "description": "Name of the primary contact person." },
+        "mobile": { "type": "string", "description": "Primary mobile number for the school." },
+        "email": { "type": "string", "description": "Optional email for the school." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the school was registered." }
+      },
+      "required": ["schoolId", "name", "mobile"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Represents a user (Admin, IT_Coordinator, Teacher) within a school.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID." },
+        "schoolId": { "type": "string", "description": "ID of the school the user belongs to." },
+        "role": { "type": "string", "enum": ["admin", "it_coordinator", "teacher"], "description": "The user's role." },
+        "name": { "type": "string", "description": "Full name of the user." },
+        "mobile": { "type": "string", "description": "Mobile number used as login ID." },
+        "status": { "type": "string", "enum": ["active", "inactive"], "description": "Account status." },
+        "firstLogin": { "type": "boolean", "description": "Flag to force password change on first login." }
+      },
+      "required": ["uid", "schoolId", "role", "name", "mobile"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "Represents a grade or class level (e.g., Grade 1).",
+      "type": "object",
+      "properties": {
+        "classId": { "type": "string", "description": "Unique ID for the class." },
+        "schoolId": { "type": "string", "description": "ID of the school." },
+        "name": { "type": "string", "description": "Name of the class (e.g., Grade 1)." }
+      },
+      "required": ["classId", "schoolId", "name"]
+    },
+    "Division": {
+      "title": "Division",
+      "description": "Represents a division within a class (e.g., A, B).",
+      "type": "object",
+      "properties": {
+        "divisionId": { "type": "string", "description": "Unique ID for the division." },
+        "schoolId": { "type": "string", "description": "ID of the school." },
+        "classId": { "type": "string", "description": "ID of the parent class." },
+        "name": { "type": "string", "description": "Name of the division (e.g., A)." },
+        "teacherId": { "type": "string", "description": "UID of the assigned teacher." }
+      },
+      "required": ["divisionId", "schoolId", "classId", "name"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Represents a student enrolled in a class and division.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Unique ID for the student." },
+        "schoolId": { "type": "string", "description": "ID of the school." },
+        "classId": { "type": "string", "description": "ID of the assigned class." },
+        "divisionId": { "type": "string", "description": "ID of the assigned division." },
+        "name": { "type": "string", "description": "Full name of the student." },
+        "admissionNumber": { "type": "string", "description": "Unique admission ID within the school." },
+        "status": { "type": "string", "enum": ["active", "pass-out"], "description": "Enrollment status." }
+      },
+      "required": ["studentId", "schoolId", "classId", "divisionId", "name", "admissionNumber"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Represents daily attendance records for a class and division.",
+      "type": "object",
+      "properties": {
+        "attendanceId": { "type": "string", "description": "Unique ID for the attendance record." },
+        "schoolId": { "type": "string", "description": "ID of the school." },
+        "classId": { "type": "string", "description": "ID of the class." },
+        "divisionId": { "type": "string", "description": "ID of the division." },
+        "date": { "type": "string", "format": "date", "description": "Date of the attendance (YYYY-MM-DD)." },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "studentId": { "type": "string" },
+              "status": { "type": "string", "enum": ["present", "absent", "late", "leave"] },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "submittedBy": { "type": "string", "description": "UID of the teacher who submitted." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the attendance was submitted." }
+      },
+      "required": ["attendanceId", "schoolId", "classId", "divisionId", "date", "records", "submittedBy", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": { "schema": "School", "description": "Root collection for schools." },
+    "/users/{uid}": { "schema": "User", "description": "Root collection for users across all schools." },
+    "/classes/{classId}": { "schema": "Class", "description": "Root collection for classes." },
+    "/divisions/{divisionId}": { "schema": "Division", "description": "Root collection for divisions." },
+    "/students/{studentId}": { "schema": "Student", "description": "Root collection for students." },
+    "/attendance/{attendanceId}": { "schema": "Attendance", "description": "Root collection for attendance records." }
+  }
+}
