@@ -5,7 +5,7 @@ export interface School {
   name: string;
   address: string;
   contactPerson: string;
-  mobile: string;
+  schoolCode: string;
   email?: string;
   createdAt: string;
 }
@@ -15,7 +15,7 @@ export interface User {
   schoolId: string;
   role: UserRole;
   name: string;
-  mobile: string;
+  teacherId: string;
   status: 'active' | 'inactive';
   firstLogin: boolean;
 }
@@ -59,4 +59,12 @@ export interface Attendance {
   records: AttendanceRecord[];
   submittedBy: string;
   timestamp: string;
+}
+
+export interface Holiday {
+  holidayId: string;
+  schoolId: string;
+  date: string; // YYYY-MM-DD
+  type: 'holiday' | 'working_saturday';
+  reason?: string;
 }

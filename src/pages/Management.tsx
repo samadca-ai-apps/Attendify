@@ -3,28 +3,38 @@ import { collection, query, where, getDocs, addDoc, setDoc, doc, deleteDoc, upda
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, auth, secondaryAuth, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Class, Division, User, Student } from '../types';
-import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X, ShieldCheck, UserCog } from 'lucide-react';
+import { Class, Division, User, Student, Holiday } from '../types';
+import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X, ShieldCheck, UserCog, Calendar, Save } from 'lucide-react';
 import Papa from 'papaparse';
+import { format, parseISO } from 'date-fns';
 
 export const Management: React.FC = () => {
   const { appUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'classes' | 'teachers' | 'students' | 'promotion'>('classes');
+  const [activeTab, setActiveTab] = useState<'classes' | 'teachers' | 'students' | 'promotion' | 'holidays'>('classes');
   const [loading, setLoading] = useState(true);
   const [classes, setClasses] = useState<Class[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedClassForStudent, setSelectedClassForStudent] = useState<string>('');
   const [selectedToClassForPromotion, setSelectedToClassForPromotion] = useState<string>('');
+  
+  // Student Filters
+  const [studentFilterClass, setStudentFilterClass] = useState<string>('');
+  const [studentFilterDivision, setStudentFilterDivision] = useState<string>('');
   const [confirmModal, setConfirmModal] = useState<{
     show: boolean;
     title: string;
     message: string;
     onConfirm: () => void;
   }>({ show: false, title: '', message: '', onConfirm: () => {} });
+  const [resetModal, setResetModal] = useState<{
+    show: boolean;
+    teacher: User | null;
+  }>({ show: false, teacher: null });
 
   const fetchData = async () => {
     if (!appUser) return;
@@ -32,17 +42,19 @@ export const Management: React.FC = () => {
     try {
       const schoolId = appUser.schoolId;
       
-      const [classesSnap, divisionsSnap, teachersSnap, studentsSnap] = await Promise.all([
+      const [classesSnap, divisionsSnap, teachersSnap, studentsSnap, holidaysSnap] = await Promise.all([
         getDocs(query(collection(db, 'classes'), where('schoolId', '==', schoolId))),
         getDocs(query(collection(db, 'divisions'), where('schoolId', '==', schoolId))),
         getDocs(query(collection(db, 'users'), where('schoolId', '==', schoolId), where('role', 'in', ['teacher', 'it_coordinator']))),
-        getDocs(query(collection(db, 'students'), where('schoolId', '==', schoolId), where('status', '==', 'active')))
+        getDocs(query(collection(db, 'students'), where('schoolId', '==', schoolId), where('status', '==', 'active'))),
+        getDocs(query(collection(db, 'holidays'), where('schoolId', '==', schoolId)))
       ]);
 
       setClasses(classesSnap.docs.map(doc => doc.data() as Class));
       setDivisions(divisionsSnap.docs.map(doc => doc.data() as Division));
       setTeachers(teachersSnap.docs.map(doc => doc.data() as User));
       setStudents(studentsSnap.docs.map(doc => doc.data() as Student));
+      setHolidays(holidaysSnap.docs.map(doc => doc.data() as Holiday));
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'management_fetch');
     } finally {
@@ -105,13 +117,18 @@ export const Management: React.FC = () => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const name = formData.get('name') as string;
-    const mobile = formData.get('mobile') as string;
-    const password = formData.get('password') as string;
+    const teacherId = formData.get('teacherId') as string;
+    let password = formData.get('password') as string;
     const role = formData.get('role') as string || 'teacher';
-    if (!appUser || !name || !mobile || !password) return;
+
+    if (!password) {
+      password = 'Pass@123';
+    }
+
+    if (!appUser || !name || !teacherId) return;
 
     try {
-      const loginEmail = `${mobile}@attendify.com`;
+      const loginEmail = `${teacherId}@attendify.com`;
       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, loginEmail, password);
       const uid = userCredential.user.uid;
 
@@ -120,7 +137,7 @@ export const Management: React.FC = () => {
         schoolId: appUser.schoolId,
         role,
         name,
-        mobile,
+        teacherId,
         status: 'active',
         firstLogin: true
       });
@@ -289,6 +306,89 @@ export const Management: React.FC = () => {
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!resetModal.teacher) return;
+
+    const formData = new FormData(e.currentTarget);
+    const newPassword = formData.get('newPassword') as string;
+
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters long');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          uid: resetModal.teacher.uid,
+          newPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSuccess(`Password reset successfully for ${resetModal.teacher.name}`);
+        setResetModal({ show: false, teacher: null });
+        fetchData();
+      } else {
+        setError(data.error || 'Failed to reset password');
+      }
+    } catch (err) {
+      setError('Failed to connect to the server');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddHoliday = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const date = formData.get('date') as string;
+    const type = formData.get('type') as 'holiday' | 'working_saturday';
+    const reason = formData.get('reason') as string;
+
+    if (!appUser || !date || !type) return;
+
+    try {
+      const holidayId = `${appUser.schoolId}_${date}`;
+      await setDoc(doc(db, 'holidays', holidayId), {
+        holidayId,
+        schoolId: appUser.schoolId,
+        date,
+        type,
+        reason
+      });
+      setSuccess('Holiday record updated!');
+      fetchData();
+      (e.target as HTMLFormElement).reset();
+    } catch (err) {
+      setError('Failed to add holiday.');
+    }
+  };
+
+  const handleDeleteHoliday = async (holidayId: string) => {
+    try {
+      await deleteDoc(doc(db, 'holidays', holidayId));
+      setSuccess('Holiday record deleted.');
+      fetchData();
+    } catch (err) {
+      setError('Failed to delete holiday.');
+    }
+  };
+
+  const filteredStudents = students.filter(s => {
+    if (studentFilterClass && s.classId !== studentFilterClass) return false;
+    if (studentFilterDivision && s.divisionId !== studentFilterDivision) return false;
+    return true;
+  });
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -313,6 +413,7 @@ export const Management: React.FC = () => {
           { id: 'teachers', label: 'Teachers', icon: UserPlus },
           { id: 'students', label: 'Students', icon: Users },
           { id: 'promotion', label: 'Promotion', icon: GraduationCap },
+          { id: 'holidays', label: 'Holidays', icon: Calendar },
         ].map(tab => (
           <button
             key={tab.id}
@@ -399,8 +500,8 @@ export const Management: React.FC = () => {
               <h3 className="text-lg font-bold text-gray-900 mb-4 text-center">Create Teacher Account</h3>
               <form onSubmit={handleAddTeacher} className="space-y-4">
                 <input name="name" required placeholder="Full Name" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                <input name="mobile" required placeholder="Mobile Number (Login ID)" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
-                <input name="password" required type="password" placeholder="Default Password" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                <input name="teacherId" required placeholder="Teacher ID (Login ID)" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                <input name="password" type="password" placeholder="Password (Default: Pass@123)" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
                 <select name="role" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
                   <option value="teacher">Teacher</option>
                   <option value="it_coordinator">IT Coordinator</option>
@@ -494,6 +595,37 @@ export const Management: React.FC = () => {
               </form>
             </div>
           )}
+
+          {activeTab === 'holidays' && (
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+              <h3 className="text-lg font-bold text-gray-900 mb-4">Mark Holiday / Working Day</h3>
+              <form onSubmit={handleAddHoliday} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-500 ml-1">Date</label>
+                  <input name="date" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-500 ml-1">Type</label>
+                  <select name="type" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="holiday">Holiday</option>
+                    <option value="working_saturday">Working Saturday</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-500 ml-1">Reason (Optional)</label>
+                  <input name="reason" placeholder="e.g., Diwali, Sports Day" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                </div>
+                <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
+                  <Save className="h-4 w-4" /> Save Record
+                </button>
+              </form>
+              <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                <p className="text-xs text-blue-700 leading-relaxed">
+                  <strong>Note:</strong> Sundays and Saturdays are holidays by default. Use "Working Saturday" to override a specific Saturday.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Column: Lists */}
@@ -505,7 +637,33 @@ export const Management: React.FC = () => {
                 {activeTab === 'teachers' && 'Teacher Accounts'}
                 {activeTab === 'students' && 'Active Students'}
                 {activeTab === 'promotion' && 'Promotion History'}
+                {activeTab === 'holidays' && 'Holiday Records'}
               </h3>
+              {activeTab === 'students' && (
+                <div className="flex items-center gap-2">
+                  <select 
+                    value={studentFilterClass}
+                    onChange={(e) => {
+                      setStudentFilterClass(e.target.value);
+                      setStudentFilterDivision('');
+                    }}
+                    className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="">All Classes</option>
+                    {classes.map(c => <option key={c.classId} value={c.classId}>{c.name}</option>)}
+                  </select>
+                  <select 
+                    value={studentFilterDivision}
+                    onChange={(e) => setStudentFilterDivision(e.target.value)}
+                    className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="">All Divisions</option>
+                    {divisions
+                      .filter(d => !studentFilterClass || d.classId === studentFilterClass)
+                      .map(d => <option key={d.divisionId} value={d.divisionId}>{d.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
             
             <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto">
@@ -590,7 +748,7 @@ export const Management: React.FC = () => {
                           <ShieldCheck className="h-4 w-4 text-blue-600" title="IT Coordinator" />
                         )}
                       </div>
-                      <p className="text-xs text-gray-500">{teacher.mobile}</p>
+                      <p className="text-xs text-gray-500">ID: {teacher.teacherId}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -606,18 +764,41 @@ export const Management: React.FC = () => {
                     <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${teacher.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                       {teacher.status}
                     </span>
+                    <button 
+                      onClick={() => setResetModal({ show: true, teacher })}
+                      className="text-gray-400 hover:text-blue-600 p-2 transition-colors"
+                      title="Reset Password"
+                    >
+                      <UserCog className="h-4 w-4" />
+                    </button>
                     <button onClick={() => {
                       setConfirmModal({
                         show: true,
                         title: 'Delete Teacher',
                         message: `Are you sure you want to delete the account for ${teacher.name}? They will lose all access to the system.`,
                         onConfirm: async () => {
+                          setLoading(true);
                           try {
-                            await deleteDoc(doc(db, 'users', teacher.uid));
-                            setSuccess('Teacher account deleted');
-                            fetchData();
+                            const response = await fetch('/api/delete-user', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({ uid: teacher.uid }),
+                            });
+
+                            const data = await response.json();
+
+                            if (data.success) {
+                              setSuccess('Teacher account and data deleted successfully');
+                              fetchData();
+                            } else {
+                              setError(data.error || 'Failed to delete teacher account');
+                            }
                           } catch (err) {
-                            setError('Failed to delete teacher account');
+                            setError('Failed to connect to the server');
+                          } finally {
+                            setLoading(false);
                           }
                           setConfirmModal(prev => ({ ...prev, show: false }));
                         }
@@ -630,7 +811,7 @@ export const Management: React.FC = () => {
               </div>
             ))}
 
-              {activeTab === 'students' && students.map(student => (
+              {activeTab === 'students' && filteredStudents.map(student => (
                 <div key={student.studentId} className="p-6 flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 font-bold">
@@ -652,9 +833,32 @@ export const Management: React.FC = () => {
                 </div>
               ))}
 
+              {activeTab === 'holidays' && holidays.sort((a, b) => b.date.localeCompare(a.date)).map(holiday => (
+                <div key={holiday.holidayId} className="p-6 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${holiday.type === 'holiday' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'}`}>
+                      <Calendar className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-gray-900">{format(parseISO(holiday.date), 'MMMM do, yyyy')}</p>
+                      <p className="text-xs text-gray-500">
+                        {holiday.type === 'holiday' ? 'Holiday' : 'Working Saturday'} {holiday.reason && `| ${holiday.reason}`}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteHoliday(holiday.holidayId)}
+                    className="text-gray-400 hover:text-red-500 p-2 transition-colors"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+
               {((activeTab === 'classes' && classes.length === 0) || 
                 (activeTab === 'teachers' && teachers.length === 0) || 
-                (activeTab === 'students' && students.length === 0)) && (
+                (activeTab === 'students' && filteredStudents.length === 0) ||
+                (activeTab === 'holidays' && holidays.length === 0)) && (
                 <div className="p-12 text-center text-gray-500">
                   No records found.
                 </div>
@@ -663,6 +867,45 @@ export const Management: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Reset Password Modal */}
+      {resetModal.show && resetModal.teacher && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in duration-200">
+            <div className="flex items-center gap-3 text-blue-600 mb-4">
+              <UserCog className="h-6 w-6" />
+              <h3 className="text-xl font-bold">Reset Password</h3>
+            </div>
+            <p className="text-gray-600 mb-6 leading-relaxed">
+              Set a new default password for <strong>{resetModal.teacher.name}</strong>. They will be required to change it on their next login.
+            </p>
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <input
+                name="newPassword"
+                type="password"
+                required
+                placeholder="New Default Password"
+                className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setResetModal({ show: false, teacher: null })}
+                  className="flex-1 px-4 py-2.5 rounded-xl font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+                >
+                  Reset Password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Modal */}
       {confirmModal.show && (

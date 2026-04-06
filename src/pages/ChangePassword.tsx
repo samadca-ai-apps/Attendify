@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { updatePassword } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Lock, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Lock, ShieldCheck, AlertCircle, ArrowRight } from 'lucide-react';
 
 export const ChangePassword: React.FC = () => {
   const { user, appUser } = useAuth();
@@ -14,27 +14,37 @@ export const ChangePassword: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
+    if (!user || !appUser) return;
 
     const formData = new FormData(e.currentTarget);
-    const password = formData.get('password') as string;
+    const newPassword = formData.get('newPassword') as string;
     const confirmPassword = formData.get('confirmPassword') as string;
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      setLoading(false);
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match');
       return;
     }
 
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters long');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
     try {
-      if (user) {
-        await updatePassword(user, password);
-        await updateDoc(doc(db, 'users', user.uid), { firstLogin: false });
-        navigate('/dashboard');
-      }
+      // 1. Update Auth Password
+      await updatePassword(user, newPassword);
+
+      // 2. Update Firestore flag
+      await updateDoc(doc(db, 'users', user.uid), {
+        firstLogin: false
+      });
+
+      navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Failed to update password.');
+      setError(err.message || 'Failed to update password. You may need to re-authenticate.');
     } finally {
       setLoading(false);
     }
@@ -47,12 +57,15 @@ export const ChangePassword: React.FC = () => {
           <div className="bg-blue-600 p-3 rounded-2xl shadow-lg mb-4">
             <ShieldCheck className="h-8 w-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Secure Your Account</h1>
-          <p className="text-gray-500 text-center mt-2">This is your first login. Please set a new, secure password before continuing.</p>
+          <h1 className="text-3xl font-bold text-gray-900">Change Password</h1>
+          <p className="text-gray-500 text-center mt-2">
+            For security reasons, you must change your password on your first login.
+          </p>
         </div>
 
         {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700 text-sm">
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700 text-sm flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
             {error}
           </div>
         )}
@@ -62,11 +75,11 @@ export const ChangePassword: React.FC = () => {
             <div className="relative">
               <Lock className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
               <input
-                name="password"
+                name="newPassword"
                 type="password"
                 required
                 placeholder="New Password"
-                className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
               />
             </div>
 
@@ -77,7 +90,7 @@ export const ChangePassword: React.FC = () => {
                 type="password"
                 required
                 placeholder="Confirm New Password"
-                className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
               />
             </div>
           </div>

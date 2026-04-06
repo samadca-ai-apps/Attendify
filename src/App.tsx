@@ -6,9 +6,12 @@ import { AuthGuard } from './components/AuthGuard';
 import { Layout } from './components/Layout';
 import { Landing } from './pages/Landing';
 import { Login } from './pages/Login';
+import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import { AttendancePage } from './pages/Attendance';
 import { Management } from './pages/Management';
+import { Reports } from './pages/Reports';
+import { Settings } from './pages/Settings';
 import { ChangePassword } from './pages/ChangePassword';
 
 export default function App() {
@@ -20,6 +23,7 @@ export default function App() {
             {/* Public Routes */}
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
 
             {/* Protected Routes */}
             <Route
@@ -53,21 +57,21 @@ export default function App() {
               }
             />
             <Route
-              path="/students"
+              path="/reports"
               element={
-                <AuthGuard allowedRoles={['admin', 'it_coordinator']}>
+                <AuthGuard allowedRoles={['admin', 'it_coordinator', 'teacher']}>
                   <Layout>
-                    <Management />
+                    <Reports />
                   </Layout>
                 </AuthGuard>
               }
             />
             <Route
-              path="/classes"
+              path="/settings"
               element={
                 <AuthGuard allowedRoles={['admin', 'it_coordinator']}>
                   <Layout>
-                    <Management />
+                    <Settings />
                   </Layout>
                 </AuthGuard>
               }

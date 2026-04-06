@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, where, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Student, Class, Division, Attendance, AttendanceRecord } from '../types';
-import { CheckCircle2, XCircle, Clock, FileText, Save, ChevronRight, Users, Calendar, X } from 'lucide-react';
-import { format } from 'date-fns';
+import { Student, Class, Division, Attendance, AttendanceRecord, Holiday } from '../types';
+import { CheckCircle2, XCircle, Clock, FileText, Save, ChevronRight, Users, Calendar, X, AlertCircle } from 'lucide-react';
+import { format, isSunday, isSaturday, parseISO } from 'date-fns';
 
 export const AttendancePage: React.FC = () => {
   const { appUser } = useAuth();
@@ -13,10 +13,12 @@ export const AttendancePage: React.FC = () => {
   const [classes, setClasses] = useState<Class[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDivision, setSelectedDivision] = useState<string>('');
+  const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
   const [students, setStudents] = useState<Student[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecord>>({});
   const [existingAttendanceId, setExistingAttendanceId] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [holidayInfo, setHolidayInfo] = useState<{ isHoliday: boolean, reason?: string } | null>(null);
 
   useEffect(() => {
     if (!appUser) return;
@@ -53,15 +55,41 @@ export const AttendancePage: React.FC = () => {
   }, [appUser]);
 
   useEffect(() => {
-    if (!selectedDivision) return;
+    if (!selectedDivision || !selectedDate) return;
 
     const fetchStudentsAndAttendance = async () => {
       setLoading(true);
       try {
-        const today = format(new Date(), 'yyyy-MM-dd');
         const schoolId = appUser.schoolId;
         
-        // 1. Fetch Students and Existing Attendance in parallel
+        // 1. Check for holidays
+        const holidaySnap = await getDocs(query(
+          collection(db, 'holidays'),
+          where('schoolId', '==', schoolId),
+          where('date', '==', selectedDate)
+        ));
+        
+        const dateObj = parseISO(selectedDate);
+        const isSun = isSunday(dateObj);
+        const isSat = isSaturday(dateObj);
+        
+        let isHoliday = isSun || isSat;
+        let holidayReason = isSun ? 'Sunday' : (isSat ? 'Saturday' : undefined);
+        
+        if (!holidaySnap.empty) {
+          const holidayData = holidaySnap.docs[0].data() as Holiday;
+          if (holidayData.type === 'holiday') {
+            isHoliday = true;
+            holidayReason = holidayData.reason || 'Public Holiday';
+          } else if (holidayData.type === 'working_saturday') {
+            isHoliday = false;
+            holidayReason = undefined;
+          }
+        }
+        
+        setHolidayInfo({ isHoliday, reason: holidayReason });
+
+        // 2. Fetch Students and Existing Attendance in parallel
         const [studentsSnap, attendanceSnap] = await Promise.all([
           getDocs(query(
             collection(db, 'students'),
@@ -73,7 +101,7 @@ export const AttendancePage: React.FC = () => {
             collection(db, 'attendance'),
             where('schoolId', '==', schoolId),
             where('divisionId', '==', selectedDivision),
-            where('date', '==', today)
+            where('date', '==', selectedDate)
           ))
         ]);
 
@@ -113,7 +141,7 @@ export const AttendancePage: React.FC = () => {
     };
 
     fetchStudentsAndAttendance();
-  }, [selectedDivision, appUser]);
+  }, [selectedDivision, selectedDate, appUser]);
 
   const handleStatusChange = (studentId: string, status: AttendanceRecord['status']) => {
     setAttendanceRecords(prev => ({
@@ -138,15 +166,14 @@ export const AttendancePage: React.FC = () => {
       const division = divisions.find(d => d.divisionId === selectedDivision);
       if (!division) return;
 
-      const today = format(new Date(), 'yyyy-MM-dd');
-      const attendanceId = existingAttendanceId || `${appUser.schoolId}_${selectedDivision}_${today}`;
+      const attendanceId = existingAttendanceId || `${appUser.schoolId}_${selectedDivision}_${selectedDate}`;
 
       const attendanceData: Attendance = {
         attendanceId,
         schoolId: appUser.schoolId,
         classId: division.classId,
         divisionId: selectedDivision,
-        date: today,
+        date: selectedDate,
         records: Object.values(attendanceRecords),
         submittedBy: appUser.uid,
         timestamp: new Date().toISOString(),
@@ -172,6 +199,8 @@ export const AttendancePage: React.FC = () => {
     );
   }
 
+  const isAdmin = appUser?.role === 'admin' || appUser?.role === 'it_coordinator';
+
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -179,10 +208,18 @@ export const AttendancePage: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">Daily Attendance</h1>
           <p className="text-gray-500 mt-1 flex items-center gap-2">
             <Calendar className="h-4 w-4" />
-            Today: {format(new Date(), 'MMMM do, yyyy')}
+            Date: {format(parseISO(selectedDate), 'MMMM do, yyyy')}
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          {isAdmin && (
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-white border border-gray-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+            />
+          )}
           <select
             value={selectedDivision}
             onChange={(e) => setSelectedDivision(e.target.value)}
@@ -199,6 +236,16 @@ export const AttendancePage: React.FC = () => {
           </select>
         </div>
       </div>
+
+      {holidayInfo?.isHoliday && (
+        <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-r-xl flex items-center gap-3">
+          <AlertCircle className="h-5 w-5 text-orange-600" />
+          <div>
+            <p className="text-orange-700 font-bold">Holiday Alert</p>
+            <p className="text-orange-600 text-sm">Today is marked as a holiday ({holidayInfo.reason}). Attendance is usually not required.</p>
+          </div>
+        </div>
+      )}
 
       {success && (
         <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-r-xl animate-in fade-in slide-in-from-top-4 duration-300 flex items-center justify-between">

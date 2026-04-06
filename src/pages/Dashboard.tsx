@@ -122,107 +122,150 @@ export const Dashboard: React.FC = () => {
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Welcome back, {appUser?.name}!</h1>
-          <p className="text-gray-500 mt-1">Here's what's happening in your school today.</p>
+          <h1 className="text-3xl font-bold text-gray-900">School Overview</h1>
+          <p className="text-gray-500 mt-1">Real-time attendance insights and school statistics.</p>
         </div>
-        <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-2">
-          <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-          <span className="text-sm font-medium text-gray-700">System Live</span>
+        <div className="flex items-center gap-2 bg-blue-50 px-4 py-2 rounded-xl border border-blue-100">
+          <CheckCircle2 className="h-5 w-5 text-blue-600" />
+          <span className="text-sm font-bold text-blue-700">System Online</span>
         </div>
       </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        {[
-          { label: 'Total Students', value: stats.totalStudents, icon: Users, color: 'blue' },
-          { label: 'Total Classes', value: stats.totalClasses, icon: BookOpen, color: 'purple' },
-          { label: 'Avg Attendance', value: `${stats.avgAttendance}%`, icon: TrendingUp, color: 'green' },
-          { label: 'Recent Reports', value: stats.recentAttendance.length, icon: ClipboardCheck, color: 'orange' },
-        ].map((stat, i) => (
-          <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-            <div className={`p-3 rounded-xl bg-${stat.color}-50 w-fit mb-4`}>
-              <stat.icon className={`h-6 w-6 text-${stat.color}-600`} />
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+              <Users className="h-6 w-6" />
             </div>
-            <p className="text-sm font-medium text-gray-500">{stat.label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Attendance Trends</h2>
-            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Last 7 Reports</span>
-          </div>
-          <div className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                <XAxis 
-                  dataKey="date" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#9ca3af', fontSize: 12 }}
-                  dy={10}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#9ca3af', fontSize: 12 }}
-                  unit="%"
-                />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="present" 
-                  stroke="#3b82f6" 
-                  strokeWidth={4} 
-                  dot={{ r: 6, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
-                  activeDot={{ r: 8, strokeWidth: 0 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Total Students</p>
+              <h3 className="text-2xl font-bold text-gray-900">{stats.totalStudents}</h3>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col">
-          <h2 className="text-lg font-bold text-gray-900 mb-6">Quick Actions</h2>
-          <div className="space-y-4 flex-grow">
-            {appUser?.role === 'teacher' ? (
-              <button className="w-full flex items-center gap-4 p-4 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors text-left font-medium">
-                <div className="bg-blue-600 p-2 rounded-lg text-white">
-                  <ClipboardCheck className="h-5 w-5" />
-                </div>
-                Take Attendance
-              </button>
-            ) : (
-              <>
-                <button className="w-full flex items-center gap-4 p-4 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors text-left font-medium">
-                  <div className="bg-blue-600 p-2 rounded-lg text-white">
-                    <Users className="h-5 w-5" />
-                  </div>
-                  Add New Student
-                </button>
-                <button className="w-full flex items-center gap-4 p-4 rounded-xl bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors text-left font-medium">
-                  <div className="bg-purple-600 p-2 rounded-lg text-white">
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                  Manage Classes
-                </button>
-              </>
-            )}
-          </div>
-          
-          <div className="mt-8 pt-8 border-t border-gray-100">
-            <div className="flex items-center gap-3 text-sm text-gray-500">
-              <AlertCircle className="h-4 w-4 text-orange-500" />
-              <span>3 classes haven't submitted attendance today.</span>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600">
+              <BookOpen className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Total Classes</p>
+              <h3 className="text-2xl font-bold text-gray-900">{stats.totalClasses}</h3>
             </div>
           </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 bg-green-50 rounded-xl flex items-center justify-center text-green-600">
+              <ClipboardCheck className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Avg. Attendance</p>
+              <h3 className="text-2xl font-bold text-gray-900">{stats.avgAttendance}%</h3>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 bg-orange-50 rounded-xl flex items-center justify-center text-orange-600">
+              <TrendingUp className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Growth Trend</p>
+              <h3 className="text-2xl font-bold text-gray-900">+12%</h3>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Attendance Chart */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-900 text-lg">Attendance Trends</h3>
+            <select className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:ring-2 focus:ring-blue-500">
+              <option>Last 7 Days</option>
+              <option>Last 30 Days</option>
+            </select>
+          </div>
+          <div className="h-[300px] w-full">
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                  <XAxis 
+                    dataKey="date" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fill: '#94a3b8', fontSize: 12 }}
+                    dy={10}
+                  />
+                  <YAxis 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fill: '#94a3b8', fontSize: 12 }}
+                    unit="%"
+                  />
+                  <Tooltip 
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="present" 
+                    stroke="#3b82f6" 
+                    strokeWidth={3} 
+                    dot={{ r: 4, fill: '#3b82f6', strokeWidth: 2, stroke: '#fff' }}
+                    activeDot={{ r: 6, strokeWidth: 0 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-gray-400 gap-2">
+                <AlertCircle className="h-8 w-8" />
+                <p>No attendance data available yet</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Recent Activity */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h3 className="font-bold text-gray-900 text-lg mb-6">Recent Activity</h3>
+          <div className="space-y-6">
+            {stats.recentAttendance.length > 0 ? (
+              stats.recentAttendance.map((record, idx) => (
+                <div key={idx} className="flex gap-4">
+                  <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 shrink-0">
+                    <ClipboardCheck className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-gray-900 truncate">
+                      Attendance Marked
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {record.className} - {record.divisionName}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-wider">
+                      {new Date(record.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-12 text-gray-400">
+                <p className="text-sm">No recent activity</p>
+              </div>
+            )}
+          </div>
+          {stats.recentAttendance.length > 0 && (
+            <button className="w-full mt-6 py-2.5 text-sm font-bold text-blue-600 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors">
+              View All Activity
+            </button>
+          )}
         </div>
       </div>
     </div>

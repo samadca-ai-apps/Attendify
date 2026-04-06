@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase';
-import { ClipboardCheck, Phone, Lock, ArrowRight } from 'lucide-react';
+import { ClipboardCheck, User, Lock, ArrowRight } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -18,15 +18,15 @@ export const Login: React.FC = () => {
     setError(null);
 
     const formData = new FormData(e.currentTarget);
-    const mobile = formData.get('mobile') as string;
+    const loginId = formData.get('loginId') as string;
     const password = formData.get('password') as string;
 
     try {
-      const loginEmail = `${mobile}@attendify.com`;
+      const loginEmail = `${loginId}@attendify.com`;
       await signInWithEmailAndPassword(auth, loginEmail, password);
       navigate(from, { replace: true });
     } catch (err: any) {
-      setError('Invalid mobile number or password.');
+      setError('Invalid School Code/Teacher ID or password.');
     } finally {
       setLoading(false);
     }
@@ -40,7 +40,7 @@ export const Login: React.FC = () => {
             <ClipboardCheck className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Sign In</h1>
-          <p className="text-gray-500 text-center mt-2">Enter your mobile number and password to access your account.</p>
+          <p className="text-gray-500 text-center mt-2">Enter your School Code/Teacher ID and password to access your account.</p>
         </div>
 
         {error && (
@@ -52,12 +52,12 @@ export const Login: React.FC = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
             <div className="relative">
-              <Phone className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
               <input
-                name="mobile"
-                type="tel"
+                name="loginId"
+                type="text"
                 required
-                placeholder="Mobile Number / Teacher ID"
+                placeholder="School Code / Teacher ID"
                 className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
               />
             </div>
@@ -93,7 +93,7 @@ export const Login: React.FC = () => {
         <div className="mt-8 text-center">
           <p className="text-gray-500 text-sm">
             Don't have a school account?{' '}
-            <Link to="/" className="text-blue-600 font-semibold hover:text-blue-700">
+            <Link to="/register" className="text-blue-600 font-semibold hover:text-blue-700">
               Register Your School
             </Link>
           </p>

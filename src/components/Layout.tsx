@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { auth } from '../firebase';
-import { LogOut, LayoutDashboard, Users, BookOpen, ClipboardCheck, Settings, Menu, X } from 'lucide-react';
+import { LogOut, LayoutDashboard, ClipboardCheck, Settings, Menu, X, FileText, ShieldCheck } from 'lucide-react';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { appUser, school } = useAuth();
@@ -18,9 +18,9 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const navItems = [
     { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['admin', 'it_coordinator', 'teacher'] },
     { label: 'Attendance', path: '/attendance', icon: ClipboardCheck, roles: ['admin', 'it_coordinator', 'teacher'] },
-    { label: 'Management', path: '/management', icon: Settings, roles: ['admin', 'it_coordinator'] },
-    { label: 'Students', path: '/students', icon: Users, roles: ['admin', 'it_coordinator'] },
-    { label: 'Classes', path: '/classes', icon: BookOpen, roles: ['admin', 'it_coordinator'] },
+    { label: 'Management', path: '/management', icon: ShieldCheck, roles: ['admin', 'it_coordinator'] },
+    { label: 'Reports', path: '/reports', icon: FileText, roles: ['admin', 'it_coordinator', 'teacher'] },
+    { label: 'Settings', path: '/settings', icon: Settings, roles: ['admin', 'it_coordinator'] },
   ];
 
   const filteredNavItems = navItems.filter(item => 

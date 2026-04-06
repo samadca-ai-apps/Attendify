@@ -24,6 +24,11 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({ children, allowedRoles }) 
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
+  // If appUser is still loading or not found, we should probably wait or redirect if we have allowedRoles
+  if (!appUser && allowedRoles) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   if (appUser && appUser.firstLogin && location.pathname !== '/change-password') {
     return <Navigate to="/change-password" replace />;
   }

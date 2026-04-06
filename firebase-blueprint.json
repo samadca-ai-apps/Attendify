@@ -9,11 +9,11 @@
         "name": { "type": "string", "description": "Name of the school." },
         "address": { "type": "string", "description": "Physical address of the school." },
         "contactPerson": { "type": "string", "description": "Name of the primary contact person." },
-        "mobile": { "type": "string", "description": "Primary mobile number for the school." },
+        "schoolCode": { "type": "string", "description": "Unique code for the school used as login ID prefix." },
         "email": { "type": "string", "description": "Optional email for the school." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the school was registered." }
       },
-      "required": ["schoolId", "name", "mobile"]
+      "required": ["schoolId", "name", "schoolCode"]
     },
     "User": {
       "title": "User",
@@ -24,11 +24,11 @@
         "schoolId": { "type": "string", "description": "ID of the school the user belongs to." },
         "role": { "type": "string", "enum": ["admin", "it_coordinator", "teacher"], "description": "The user's role." },
         "name": { "type": "string", "description": "Full name of the user." },
-        "mobile": { "type": "string", "description": "Mobile number used as login ID." },
+        "teacherId": { "type": "string", "description": "Teacher ID used as login ID." },
         "status": { "type": "string", "enum": ["active", "inactive"], "description": "Account status." },
         "firstLogin": { "type": "boolean", "description": "Flag to force password change on first login." }
       },
-      "required": ["uid", "schoolId", "role", "name", "mobile"]
+      "required": ["uid", "schoolId", "role", "name", "teacherId"]
     },
     "Class": {
       "title": "Class",
