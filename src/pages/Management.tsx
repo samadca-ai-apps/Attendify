@@ -749,7 +749,9 @@ export const Management: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <p className="font-bold text-gray-900">{teacher.name}</p>
                         {teacher.role === 'it_coordinator' && (
-                          <ShieldCheck className="h-4 w-4 text-blue-600" title="IT Coordinator" />
+                          <span title="IT Coordinator">
+                            <ShieldCheck className="h-4 w-4 text-blue-600" />
+                          </span>
                         )}
                       </div>
                       <p className="text-xs text-gray-500">ID: {teacher.teacherId}</p>

@@ -55,6 +55,8 @@ export interface Attendance {
   schoolId: string;
   classId: string;
   divisionId: string;
+  className?: string;
+  divisionName?: string;
   date: string;
   records: AttendanceRecord[];
   submittedBy: string;
