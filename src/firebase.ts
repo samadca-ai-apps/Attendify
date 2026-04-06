@@ -15,10 +15,10 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || firebaseAppletConfig.measurementId
 };
 
-const firestoreDatabaseId = import.meta.env.VITE_FIRESTORE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId;
+const firestoreDatabaseId = import.meta.env.VITE_FIRESTORE_DATABASE_ID || firebaseAppletConfig.firestoreDatabaseId || '(default)';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firestoreDatabaseId);
+export const db = getFirestore(app, firestoreDatabaseId.toString());
 export const auth = getAuth(app);
 
 // Secondary app for creating users without signing out the current user
