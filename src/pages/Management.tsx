@@ -149,7 +149,11 @@ export const Management: React.FC = () => {
       fetchData();
       (e.target as HTMLFormElement).reset();
     } catch (err: any) {
-      setError(err.message || 'Failed to create teacher account.');
+      if (err.code === 'auth/email-already-in-use') {
+        setError(`Teacher ID "${teacherId}" is already registered. Please use a unique ID.`);
+      } else {
+        setError(err.message || 'Failed to create teacher account.');
+      }
     }
   };
 
