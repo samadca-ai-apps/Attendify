@@ -24,6 +24,7 @@ export interface Class {
   classId: string;
   schoolId: string;
   name: string;
+  startDate?: string;
 }
 
 export interface Division {
@@ -34,6 +35,13 @@ export interface Division {
   teacherId?: string;
 }
 
+export interface ClassHistory {
+  classId: string;
+  divisionId: string;
+  startDate: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+}
+
 export interface Student {
   studentId: string;
   schoolId: string;
@@ -41,12 +49,18 @@ export interface Student {
   divisionId: string;
   name: string;
   admissionNumber: string;
-  status: 'active' | 'pass-out';
+  status: 'active' | 'pass-out' | 'terminated';
+  admissionDate: string; // YYYY-MM-DD
+  promotionDate?: string; // YYYY-MM-DD
+  passoutDate?: string; // YYYY-MM-DD
+  terminationDate?: string; // YYYY-MM-DD
+  terminationReason?: string;
+  classHistory: ClassHistory[];
 }
 
 export interface AttendanceRecord {
   studentId: string;
-  status: 'present' | 'absent' | 'late' | 'leave';
+  status: 'full_day' | 'fn_only' | 'an_only' | 'absent';
   note?: string;
 }
 
@@ -69,4 +83,14 @@ export interface Holiday {
   date: string; // YYYY-MM-DD
   type: 'holiday' | 'working_saturday';
   reason?: string;
+}
+
+export interface AcademicYearConfig {
+  configId: string;
+  schoolId: string;
+  academicYear: string;
+  classId: string;
+  divisionId?: string;
+  startDate?: string;
+  teacherId?: string;
 }

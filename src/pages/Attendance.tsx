@@ -2,23 +2,66 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, where, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Student, Class, Division, Attendance, AttendanceRecord, Holiday } from '../types';
 import { CheckCircle2, XCircle, Clock, FileText, Save, ChevronRight, Users, Calendar, X, AlertCircle } from 'lucide-react';
 import { format, isSunday, isSaturday, parseISO } from 'date-fns';
+import { AttendanceCalendar } from '../components/AttendanceCalendar';
+import { DatePickerModal } from '../components/DatePickerModal';
 
 export const AttendancePage: React.FC = () => {
-  const { appUser } = useAuth();
+  const { user, appUser } = useAuth();
+  const { academicYear } = useAcademicYear();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [classes, setClasses] = useState<Class[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDivision, setSelectedDivision] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [previousAcademicYear, setPreviousAcademicYear] = useState<string>(academicYear);
   const [students, setStudents] = useState<Student[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<Record<string, AttendanceRecord>>({});
   const [existingAttendanceId, setExistingAttendanceId] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [holidayInfo, setHolidayInfo] = useState<{ isHoliday: boolean, reason?: string } | null>(null);
+  const [allHolidays, setAllHolidays] = useState<Holiday[]>([]);
+  const [calendarModal, setCalendarModal] = useState<{ show: boolean, student: Student | null }>({ show: false, student: null });
+  const [datePickerModal, setDatePickerModal] = useState<{ show: boolean }>({ show: false });
+
+  useEffect(() => {
+    if (academicYear !== previousAcademicYear) {
+        const [startYear] = academicYear.split('-').map(Number);
+        const today = new Date();
+        
+        const acadStart = new Date(startYear, 5, 1);
+        const acadEnd = new Date(startYear + 1, 4, 31);
+        
+        if (today >= acadStart && today <= acadEnd) {
+            setSelectedDate(format(today, 'yyyy-MM-dd'));
+        } else {
+            setSelectedDate(format(acadStart, 'yyyy-MM-dd'));
+        }
+        setPreviousAcademicYear(academicYear);
+    }
+  }, [academicYear, previousAcademicYear]);
+
+  const getSelectedClassStartDate = () => {
+    const division = divisions.find(d => d.divisionId === selectedDivision);
+    if (!division) return undefined;
+    const cls = classes.find(c => c.classId === division.classId);
+    return cls?.startDate;
+  };
+
+  const isAttendanceAllowed = (student: Student, selectedDate: string, classStartDate?: string) => {
+    const date = parseISO(selectedDate);
+    const admissionDate = student.admissionDate ? parseISO(student.admissionDate) : null;
+    const classStartDateObj = classStartDate ? parseISO(classStartDate) : null;
+
+    if (admissionDate && date < admissionDate) return false;
+    if (classStartDateObj && date < classStartDateObj) return false;
+    return true;
+  };
 
   useEffect(() => {
     if (!appUser) return;
@@ -63,34 +106,10 @@ export const AttendancePage: React.FC = () => {
         const schoolId = appUser.schoolId;
         
         // 1. Check for holidays
-        const holidaySnap = await getDocs(query(
-          collection(db, 'holidays'),
-          where('schoolId', '==', schoolId),
-          where('date', '==', selectedDate)
-        ));
-        
-        const dateObj = parseISO(selectedDate);
-        const isSun = isSunday(dateObj);
-        const isSat = isSaturday(dateObj);
-        
-        let isHoliday = isSun || isSat;
-        let holidayReason = isSun ? 'Sunday' : (isSat ? 'Saturday' : undefined);
-        
-        if (!holidaySnap.empty) {
-          const holidayData = holidaySnap.docs[0].data() as Holiday;
-          if (holidayData.type === 'holiday') {
-            isHoliday = true;
-            holidayReason = holidayData.reason || 'Public Holiday';
-          } else if (holidayData.type === 'working_saturday') {
-            isHoliday = false;
-            holidayReason = undefined;
-          }
-        }
-        
-        setHolidayInfo({ isHoliday, reason: holidayReason });
+        // Holiday check will be done after fetching holidays safely in Promise.all 
 
-        // 2. Fetch Students and Existing Attendance in parallel
-        const [studentsSnap, attendanceSnap] = await Promise.all([
+        // 2. Fetch Students, Existing Attendance, and ALL holidays in parallel
+        const [studentsSnap, attendanceSnap, allHolidaysSnap, todayHolidaySnap] = await Promise.all([
           getDocs(query(
             collection(db, 'students'),
             where('schoolId', '==', schoolId),
@@ -102,11 +121,38 @@ export const AttendancePage: React.FC = () => {
             where('schoolId', '==', schoolId),
             where('divisionId', '==', selectedDivision),
             where('date', '==', selectedDate)
+          )),
+          getDocs(query(collection(db, 'holidays'), where('schoolId', '==', schoolId))),
+          getDocs(query(
+            collection(db, 'holidays'),
+            where('schoolId', '==', schoolId),
+            where('date', '==', selectedDate)
           ))
         ]);
 
         const studentsData = studentsSnap.docs.map(doc => doc.data() as Student);
-        setStudents(studentsData);
+        setStudents([...studentsData].sort((a, b) => a.name.localeCompare(b.name)));
+        setAllHolidays(allHolidaysSnap.docs.map(doc => doc.data() as Holiday));
+        
+        const dateObj = parseISO(selectedDate);
+        const isSun = isSunday(dateObj);
+        const isSat = isSaturday(dateObj);
+        
+        let isHoliday = isSun || isSat;
+        let holidayReason = isSun ? 'Sunday' : (isSat ? 'Saturday' : undefined);
+        
+        if (!todayHolidaySnap.empty) {
+          const holidayData = todayHolidaySnap.docs[0].data() as Holiday;
+          if (holidayData.type === 'holiday') {
+            isHoliday = true;
+            holidayReason = holidayData.reason || 'Public Holiday';
+          } else if (holidayData.type === 'working_saturday') {
+            isHoliday = false;
+            holidayReason = undefined;
+          }
+        }
+        
+        setHolidayInfo({ isHoliday, reason: holidayReason });
 
         if (!attendanceSnap.empty) {
           const existingData = attendanceSnap.docs[0].data() as Attendance;
@@ -120,7 +166,7 @@ export const AttendancePage: React.FC = () => {
           // Fill in any missing students (if new students were added after attendance was taken)
           studentsData.forEach(s => {
             if (!records[s.studentId]) {
-              records[s.studentId] = { studentId: s.studentId, status: 'present' };
+              records[s.studentId] = { studentId: s.studentId, status: 'full_day' };
             }
           });
           
@@ -129,7 +175,7 @@ export const AttendancePage: React.FC = () => {
           setExistingAttendanceId(null);
           const initialRecords: Record<string, AttendanceRecord> = {};
           studentsData.forEach(s => {
-            initialRecords[s.studentId] = { studentId: s.studentId, status: 'present' };
+            initialRecords[s.studentId] = { studentId: s.studentId, status: 'full_day' };
           });
           setAttendanceRecords(initialRecords);
         }
@@ -159,23 +205,35 @@ export const AttendancePage: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!appUser || !selectedDivision) return;
+    
+    // Filter out students for whom attendance is not allowed
+    const classStartDate = getSelectedClassStartDate();
+    const validRecords = Object.values(attendanceRecords).filter(record => {
+      const student = students.find(s => s.studentId === record.studentId);
+      return student && isAttendanceAllowed(student, selectedDate, classStartDate);
+    });
+
     setSaving(true);
     setSuccess(false);
+    setError(null);
 
     try {
       const division = divisions.find(d => d.divisionId === selectedDivision);
       if (!division) return;
 
       const attendanceId = existingAttendanceId || `${appUser.schoolId}_${selectedDivision}_${selectedDate}`;
+      const className = classes.find(c => c.classId === division.classId)?.name || 'Unknown Class';
 
       const attendanceData: Attendance = {
         attendanceId,
         schoolId: appUser.schoolId,
         classId: division.classId,
         divisionId: selectedDivision,
+        className,
+        divisionName: division.name,
         date: selectedDate,
-        records: Object.values(attendanceRecords),
-        submittedBy: appUser.uid,
+        records: validRecords,
+        submittedBy: user?.uid || '',
         timestamp: new Date().toISOString(),
       };
 
@@ -200,6 +258,7 @@ export const AttendancePage: React.FC = () => {
   }
 
   const isAdmin = appUser?.role === 'admin' || appUser?.role === 'it_coordinator';
+  const today = format(new Date(), 'yyyy-MM-dd');
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
@@ -213,11 +272,23 @@ export const AttendancePage: React.FC = () => {
         </div>
         <div className="flex flex-col sm:flex-row items-center gap-4">
           {isAdmin && (
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-white border border-gray-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+            <button
+              onClick={() => setDatePickerModal({ show: true })}
+              className="bg-white border border-gray-200 rounded-xl px-4 py-2 hover:bg-gray-50 flex items-center gap-2 shadow-sm"
+            >
+              <Calendar className="h-4 w-4 text-blue-600" />
+              {format(parseISO(selectedDate), 'MMMM do, yyyy')}
+            </button>
+          )}
+          {datePickerModal.show && (
+            <DatePickerModal
+              selectedDate={selectedDate}
+              onSelectDate={(date) => {
+                setSelectedDate(date);
+                setDatePickerModal({ show: false });
+              }}
+              onClose={() => setDatePickerModal({ show: false })}
+              holidays={allHolidays}
             />
           )}
           <select
@@ -259,6 +330,18 @@ export const AttendancePage: React.FC = () => {
         </div>
       )}
 
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl animate-in fade-in slide-in-from-top-4 duration-300 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600" />
+            <p className="text-red-700 font-medium">{error}</p>
+          </div>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 transition-colors p-1 hover:bg-red-100 rounded-lg">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -279,54 +362,62 @@ export const AttendancePage: React.FC = () => {
         </div>
 
         <div className="divide-y divide-gray-100">
-          {students.map((student, index) => (
-            <div key={student.studentId} className="p-6 hover:bg-gray-50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-              <div className="flex items-center gap-4">
-                <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 font-bold">
-                  {index + 1}
-                </div>
-                <div>
-                  <p className="font-bold text-gray-900">{student.name}</p>
-                  <p className="text-xs text-gray-500">ID: {student.admissionNumber}</p>
-                </div>
-              </div>
+          {students.map((student, index) => {
+            const classStartDate = getSelectedClassStartDate();
+            const allowed = isAttendanceAllowed(student, selectedDate, classStartDate);
+            return (
+              <div key={student.studentId} className={`p-6 hover:bg-gray-50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-6 ${!allowed ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center gap-4">
+                    <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 font-bold">
+                      {index + 1}
+                    </div>
+                    <div>
+                      <p 
+                        className="font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors"
+                        onClick={() => setCalendarModal({ show: true, student })}
+                      >
+                        {student.name}
+                      </p>
+                      <p className="text-xs text-gray-500">ID: {student.admissionNumber}</p>
+                      {!allowed && <p className="text-xs text-red-500 font-bold">Attendance not allowed for this date</p>}
+                    </div>
+                  </div>
 
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex bg-gray-100 p-1 rounded-xl">
-                  {[
-                    { id: 'present', icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-50' },
-                    { id: 'absent', icon: XCircle, color: 'text-red-600', bg: 'bg-red-50' },
-                    { id: 'late', icon: Clock, color: 'text-orange-600', bg: 'bg-orange-50' },
-                    { id: 'leave', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
-                  ].map((status) => (
-                    <button
-                      key={status.id}
-                      onClick={() => handleStatusChange(student.studentId, status.id as any)}
-                      className={`p-2 rounded-lg transition-all flex items-center gap-2 ${
-                        attendanceRecords[student.studentId]?.status === status.id
-                          ? `${status.bg} ${status.color} shadow-sm ring-1 ring-black/5`
-                          : 'text-gray-400 hover:bg-gray-200'
-                      }`}
-                      title={status.id.charAt(0).toUpperCase() + status.id.slice(1)}
-                    >
-                      <status.icon className="h-5 w-5" />
-                      <span className={`text-xs font-bold capitalize ${attendanceRecords[student.studentId]?.status === status.id ? 'block' : 'hidden'}`}>
-                        {status.id}
-                      </span>
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex bg-gray-100 p-1 rounded-xl">
+                    {[
+                      { id: 'full_day', label: 'Full Day', color: 'text-green-600', bg: 'bg-green-50' },
+                      { id: 'fn_only', label: 'FN Only', color: 'text-blue-600', bg: 'bg-blue-50' },
+                      { id: 'an_only', label: 'AN Only', color: 'text-purple-600', bg: 'bg-purple-50' },
+                      { id: 'absent', label: 'Absent', color: 'text-red-600', bg: 'bg-red-50' },
+                    ].map((status) => (
+                      <button
+                        key={status.id}
+                        disabled={!allowed}
+                        onClick={() => handleStatusChange(student.studentId, status.id as any)}
+                        className={`px-3 py-2 rounded-lg transition-all text-xs font-bold ${
+                          attendanceRecords[student.studentId]?.status === status.id
+                            ? `${status.bg} ${status.color} shadow-sm ring-1 ring-black/5`
+                            : 'text-gray-400 hover:bg-gray-200'
+                        }`}
+                      >
+                        {status.label}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  <input
+                    type="text"
+                    placeholder="Add note..."
+                    disabled={!allowed}
+                    value={attendanceRecords[student.studentId]?.note || ''}
+                    onChange={(e) => handleNoteChange(student.studentId, e.target.value)}
+                    className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none w-full sm:w-40"
+                  />
                 </div>
-                
-                <input
-                  type="text"
-                  placeholder="Add note..."
-                  value={attendanceRecords[student.studentId]?.note || ''}
-                  onChange={(e) => handleNoteChange(student.studentId, e.target.value)}
-                  className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 outline-none w-full sm:w-40"
-                />
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {students.length === 0 && (
             <div className="p-12 text-center">
@@ -350,19 +441,27 @@ export const AttendancePage: React.FC = () => {
           <button
             onClick={handleSubmit}
             disabled={saving || students.length === 0}
-            className="bg-blue-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 flex items-center gap-2 disabled:opacity-50"
+            className={`${existingAttendanceId ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-200'} text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 disabled:opacity-50`}
           >
             {saving ? (
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
             ) : (
               <>
                 <Save className="h-5 w-5" />
-                Submit Attendance
+                {existingAttendanceId ? 'Update Attendance' : 'Submit Attendance'}
               </>
             )}
           </button>
         </div>
       </div>
+      {calendarModal.show && calendarModal.student && (
+        <AttendanceCalendar
+          student={calendarModal.student}
+          className={classes.find(c => c.classId === calendarModal.student.classId)?.name || 'Unknown'}
+          divisionName={divisions.find(d => d.divisionId === calendarModal.student.divisionId)?.name || 'Unknown'}
+          onClose={() => setCalendarModal({ show: false, student: null })}
+        />
+      )}
     </div>
   );
 };

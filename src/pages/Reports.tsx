@@ -2,24 +2,26 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Class, Division, Attendance } from '../types';
-import { FileText, Download, Calendar, Filter, ChevronRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { Class, Division, Attendance, Student, Holiday } from '../types';
+import { FileText, Download, Calendar, Filter, ChevronRight, AlertCircle, CheckCircle2, FileDown } from 'lucide-react';
 import Papa from 'papaparse';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { format, startOfMonth, parse } from 'date-fns';
+import { generateAttendanceReport, generateYearlyAttendanceReport } from '../utils/pdfGenerator';
+import { MonthPickerModal } from '../components/MonthPickerModal';
 
 export const Reports: React.FC = () => {
-  const { appUser } = useAuth();
+  const { appUser, school } = useAuth();
+  const { academicYear, setAcademicYear } = useAcademicYear();
   const [loading, setLoading] = useState(true);
   const [classes, setClasses] = useState<Class[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedClass, setSelectedClass] = useState<string>('');
   const [selectedDivision, setSelectedDivision] = useState<string>('');
-  const [dateRange, setDateRange] = useState({
-    start: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
-    end: format(new Date(), 'yyyy-MM-dd')
-  });
+  const [selectedMonth, setSelectedMonth] = useState<string>(format(new Date(), 'yyyy-MM'));
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [monthPickerModal, setMonthPickerModal] = useState<{ show: boolean }>({ show: false });
 
   useEffect(() => {
     if (!appUser) return;
@@ -56,26 +58,21 @@ export const Reports: React.FC = () => {
     try {
       const schoolId = appUser.schoolId;
       
-      // 1. Fetch all attendance records for the division in the date range
-      const attendanceQuery = query(
+      const attendanceSnap = await getDocs(query(
         collection(db, 'attendance'),
         where('schoolId', '==', schoolId),
-        where('divisionId', '==', selectedDivision),
-        where('date', '>=', dateRange.start),
-        where('date', '<=', dateRange.end),
-        orderBy('date', 'asc')
-      );
-
-      const attendanceSnap = await getDocs(attendanceQuery);
-      const attendanceData = attendanceSnap.docs.map(doc => doc.data() as Attendance);
+        where('divisionId', '==', selectedDivision)
+      ));
+      const attendanceData = attendanceSnap.docs
+        .map(doc => doc.data() as Attendance)
+        .filter(record => record.date.startsWith(selectedMonth));
 
       if (attendanceData.length === 0) {
-        setError('No attendance records found for the selected period.');
+        setError('No attendance records found for the selected month.');
         setGenerating(false);
         return;
       }
 
-      // 2. Fetch students for this division to get their names
       const studentsSnap = await getDocs(query(
         collection(db, 'students'),
         where('schoolId', '==', schoolId),
@@ -87,8 +84,6 @@ export const Reports: React.FC = () => {
         studentMap[s.studentId] = s.name;
       });
 
-      // 3. Prepare CSV Data
-      // Header: Date, Student Name, Status, Note
       const csvData: any[] = [];
       
       attendanceData.forEach(record => {
@@ -109,7 +104,7 @@ export const Reports: React.FC = () => {
       
       const division = divisions.find(d => d.divisionId === selectedDivision);
       const className = classes.find(c => c.classId === division?.classId)?.name || 'Class';
-      const fileName = `Attendance_Report_${className}_${division?.name}_${dateRange.start}_to_${dateRange.end}.csv`;
+      const fileName = `Attendance_Report_${className}_${division?.name}_${selectedMonth}.csv`;
       
       link.setAttribute('href', url);
       link.setAttribute('download', fileName);
@@ -121,6 +116,102 @@ export const Reports: React.FC = () => {
     } catch (err) {
       console.error('Report generation error:', err);
       setError('Failed to generate report. Please try again.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!appUser || !selectedDivision) {
+      setError('Please select a division first.');
+      return;
+    }
+
+    setGenerating(true);
+    setError(null);
+
+    try {
+      const schoolId = appUser.schoolId;
+      
+      const [attendanceSnap, studentsSnap, holidaysSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'attendance'),
+          where('schoolId', '==', schoolId),
+          where('divisionId', '==', selectedDivision)
+        )),
+        getDocs(query(
+          collection(db, 'students'),
+          where('schoolId', '==', schoolId),
+          where('divisionId', '==', selectedDivision)
+        )),
+        getDocs(query(
+          collection(db, 'holidays'),
+          where('schoolId', '==', schoolId)
+        ))
+      ]);
+      const attendanceData = attendanceSnap.docs
+        .map(doc => doc.data() as Attendance)
+        .filter(record => record.date.startsWith(selectedMonth));
+      const students = studentsSnap.docs.map(doc => doc.data() as Student);
+      const holidays = holidaysSnap.docs.map(doc => doc.data() as Holiday);
+
+      const division = divisions.find(d => d.divisionId === selectedDivision);
+      const className = classes.find(c => c.classId === division?.classId);
+      const classStartDate = className?.startDate;
+      const classNameStr = className?.name || 'Unknown';
+
+      generateAttendanceReport(attendanceData, students, classNameStr, division?.name || 'Division', selectedMonth, holidays, school?.name || 'School Name', classStartDate);
+
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      setError('Failed to generate PDF report. Please try again.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleDownloadYearlyPDF = async () => {
+    if (!appUser || !selectedDivision) {
+      setError('Please select a division first.');
+      return;
+    }
+
+    setGenerating(true);
+    setError(null);
+
+    try {
+      const schoolId = appUser.schoolId;
+      
+      const [attendanceSnap, studentsSnap, holidaysSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, 'attendance'),
+          where('schoolId', '==', schoolId),
+          where('divisionId', '==', selectedDivision)
+        )),
+        getDocs(query(
+          collection(db, 'students'),
+          where('schoolId', '==', schoolId),
+          where('divisionId', '==', selectedDivision)
+        )),
+        getDocs(query(
+          collection(db, 'holidays'),
+          where('schoolId', '==', schoolId)
+        ))
+      ]);
+      const attendanceData = attendanceSnap.docs.map(doc => doc.data() as Attendance);
+      const students = studentsSnap.docs.map(doc => doc.data() as Student);
+      const holidays = holidaysSnap.docs.map(doc => doc.data() as Holiday);
+
+      const division = divisions.find(d => d.divisionId === selectedDivision);
+      const className = classes.find(c => c.classId === division?.classId);
+      const classStartDate = className?.startDate;
+      const classNameStr = className?.name || 'Unknown';
+
+      generateYearlyAttendanceReport(attendanceData, students, classNameStr, division?.name || 'Division', academicYear, holidays, school?.name || 'Attendify', classStartDate);
+
+    } catch (err) {
+      console.error('Yearly PDF generation error:', err);
+      setError('Failed to generate yearly PDF report. Please try again.');
     } finally {
       setGenerating(false);
     }
@@ -138,7 +229,7 @@ export const Reports: React.FC = () => {
     <div className="max-w-4xl mx-auto space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Download Reports</h1>
-        <p className="text-gray-500 mt-1">Generate and export attendance data in CSV format.</p>
+        <p className="text-gray-500 mt-1">Generate and export attendance data in CSV or PDF format.</p>
       </div>
 
       <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 space-y-6">
@@ -185,27 +276,48 @@ export const Reports: React.FC = () => {
           <div className="space-y-2">
             <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
               <Calendar className="h-4 w-4 text-blue-600" />
-              Start Date
+              Select Month
             </label>
             <input 
-              type="date"
-              value={dateRange.start}
-              onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none hidden"
             />
+            <button
+              onClick={() => setMonthPickerModal({ show: true })}
+              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-left flex items-center justify-between"
+            >
+              <span className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-blue-600" />
+                {format(parse(selectedMonth, 'yyyy-MM', new Date()), 'MMMM yyyy')}
+              </span>
+            </button>
+            {monthPickerModal.show && (
+              <MonthPickerModal
+                selectedMonth={selectedMonth}
+                academicYear={academicYear}
+                onSelectMonth={(month) => {
+                  setSelectedMonth(month);
+                  setMonthPickerModal({ show: false });
+                }}
+                onClose={() => setMonthPickerModal({ show: false })}
+              />
+            )}
           </div>
-
           <div className="space-y-2">
             <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
               <Calendar className="h-4 w-4 text-blue-600" />
-              End Date
+              Academic Year
             </label>
-            <input 
-              type="date"
-              value={dateRange.end}
-              onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+            <select 
+              value={academicYear}
+              onChange={(e) => setAcademicYear(e.target.value)}
               className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-            />
+            >
+              <option value="2025-2026">2025-2026</option>
+              <option value="2024-2025">2024-2025</option>
+            </select>
           </div>
         </div>
 
@@ -216,18 +328,46 @@ export const Reports: React.FC = () => {
           </div>
         )}
 
-        <div className="pt-4">
+        <div className="pt-4 flex gap-4">
           <button
             onClick={handleDownloadReport}
             disabled={generating || !selectedDivision}
-            className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {generating ? (
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
             ) : (
               <>
                 <Download className="h-6 w-6" />
-                Generate & Download CSV Report
+                Download CSV Report
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleDownloadPDF}
+            disabled={generating || !selectedDivision}
+            className="flex-1 bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 transition-all shadow-lg shadow-green-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {generating ? (
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+            ) : (
+              <>
+                <FileDown className="h-6 w-6" />
+                Download PDF Report
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleDownloadYearlyPDF}
+            disabled={generating || !selectedDivision}
+            className="flex-1 bg-purple-600 text-white py-4 rounded-2xl font-bold hover:bg-purple-700 transition-all shadow-lg shadow-purple-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {generating ? (
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+            ) : (
+              <>
+                <FileDown className="h-6 w-6" />
+                Download Yearly PDF Report
               </>
             )}
           </button>
@@ -242,7 +382,7 @@ export const Reports: React.FC = () => {
           <div>
             <h4 className="font-bold text-blue-900">Report Information</h4>
             <p className="text-sm text-blue-700 mt-1 leading-relaxed">
-              The generated report will include daily attendance status (Present, Absent, Late, Leave) for all students in the selected division within the specified date range. You can open this CSV file in Microsoft Excel, Google Sheets, or any other spreadsheet software.
+              The generated report will include daily attendance status (Present, Absent, Late, Leave) for all students in the selected division within the specified date range. You can open this CSV file in Microsoft Excel, Google Sheets, or any other spreadsheet software. The PDF report will be in A4 format.
             </p>
           </div>
         </div>

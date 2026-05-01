@@ -60,6 +60,7 @@
 //   - divisionId: string (required, immutable)
 //   - date: string (required, YYYY-MM-DD)
 //   - records: list (required, items: {studentId, status, note})
+//     - status: enum: ['full_day', 'fn_only', 'an_only', 'absent']
 //   - submittedBy: string (required, immutable)
 //   - timestamp: timestamp (required)
 //
@@ -92,16 +93,18 @@ service cloud.firestore {
 
     function isSchoolMember(schoolId) {
       return isAuthenticated() && 
-             (isSuperAdmin() || (
-               exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId
-             ));
+             (isSuperAdmin() || 
+               (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId)
+             );
     }
 
     function hasRole(role) {
       return isAuthenticated() && 
-             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+             (isSuperAdmin() || (
+               exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role
+             ));
     }
 
     function isSuperAdmin() {
@@ -125,6 +128,13 @@ service cloud.firestore {
       return isAdmin() || isITCoordinator();
     }
 
+    function isNotFutureDate(dateStr) {
+      // dateStr is YYYY-MM-DD. CEL does not support split().
+      // We use timestamp conversion with a 24h buffer to account for timezone differences.
+      // This ensures that "today" in any timezone is not considered a future date relative to UTC.
+      return timestamp(dateStr + "T00:00:00Z") <= request.time + duration.value(24, 'h');
+    }
+
     function isValidSchool(data) {
       return data.schoolId is string && data.schoolId.size() > 0 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
@@ -136,7 +146,7 @@ service cloud.firestore {
       return data.uid is string && data.uid.size() > 0 &&
              data.schoolId is string && data.schoolId.size() > 0 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.teacherId is string && data.teacherId.size() >= 4 &&
+             data.teacherId is string && data.teacherId.size() >= 1 &&
              data.role in ['admin', 'it_coordinator', 'teacher'] &&
              data.status in ['active', 'inactive'] &&
              data.firstLogin is bool;
@@ -162,7 +172,9 @@ service cloud.firestore {
              data.divisionId is string && data.divisionId.size() > 0 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.admissionNumber is string && data.admissionNumber.size() > 0 &&
-             data.status in ['active', 'pass-out'];
+             data.status in ['active', 'pass-out', 'terminated'] &&
+             (!('admissionDate' in data) || (data.admissionDate is string && data.admissionDate.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))) &&
+             (!('classHistory' in data) || data.classHistory is list);
     }
 
     function isValidAttendance(data) {
@@ -171,6 +183,7 @@ service cloud.firestore {
              data.classId is string && data.classId.size() > 0 &&
              data.divisionId is string && data.divisionId.size() > 0 &&
              data.date is string && data.date.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") &&
+             isNotFutureDate(data.date) &&
              data.records is list && data.records.size() > 0 &&
              data.submittedBy is string &&
              data.timestamp is string;
@@ -191,11 +204,10 @@ service cloud.firestore {
     match /schools/{schoolId} {
       allow read: if isAuthenticated() && (
         isSuperAdmin() || 
-        (resource != null && resource.data.createdBy == request.auth.uid) ||
         isSchoolMember(schoolId)
       );
       allow create: if isAuthenticated() && isValidSchool(request.resource.data); 
-      allow update: if isAuthenticated() && isSchoolMember(schoolId) && isAdmin() && isValidSchool(request.resource.data);
+      allow update: if isAuthenticated() && isSchoolMember(schoolId) && isAdmin();
       allow delete: if false;
     }
 
@@ -241,8 +253,10 @@ service cloud.firestore {
     // Attendance
     match /attendance/{attendanceId} {
       allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
-      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && (isTeacher() || isStaff()) && isValidAttendance(request.resource.data);
-      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && (isTeacher() || isStaff()) && isValidAttendance(request.resource.data);
+      allow create: if isAuthenticated() && 
+                      request.resource.data.submittedBy == request.auth.uid;
+      allow update: if isAuthenticated() && 
+                      (isTeacher() || isStaff());
       allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
     }
 
@@ -252,6 +266,20 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff() && isValidHoliday(request.resource.data);
       allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff() && isValidHoliday(request.resource.data);
       allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // AcademicYearConfigs
+    match /academicYearConfigs/{configId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff();
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // Dashboard Static Stats
+    match /dashboard_static_stats/{statId} {
+      allow read: if isAuthenticated() && (isSuperAdmin() || isSchoolMember(resource.data.schoolId));
+      allow create, update, delete: if isSuperAdmin();
     }
   }
 }

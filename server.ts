@@ -68,6 +68,24 @@ async function startServer() {
   app.use(express.json());
 
   // API Routes
+  app.post('/api/get-school-email', async (req, res) => {
+    const { schoolCode } = req.body;
+    if (!schoolCode) {
+      return res.status(400).json({ error: 'Missing schoolCode' });
+    }
+    try {
+      const schoolsSnap = await getDbService().collection('schools').where('schoolCode', '==', schoolCode).get();
+      if (schoolsSnap.empty) {
+        return res.status(404).json({ error: 'School not found' });
+      }
+      const schoolData = schoolsSnap.docs[0].data();
+      res.json({ email: schoolData.email });
+    } catch (error) {
+      console.error('Error fetching school email:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   app.post('/api/reset-password', async (req, res) => {
     const { uid, newPassword } = req.body;
 

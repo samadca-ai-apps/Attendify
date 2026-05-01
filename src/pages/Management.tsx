@@ -3,24 +3,32 @@ import { collection, query, where, getDocs, addDoc, setDoc, doc, deleteDoc, upda
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, auth, secondaryAuth, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Class, Division, User, Student, Holiday } from '../types';
+import { useAcademicYear, CURRENT_ACADEMIC_YEAR } from '../contexts/AcademicYearContext';
+import { Class, Division, User, Student, Holiday, AcademicYearConfig } from '../types';
 import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X, ShieldCheck, UserCog, Calendar, Save } from 'lucide-react';
 import Papa from 'papaparse';
 import { format, parseISO } from 'date-fns';
+import { AttendanceCalendar } from '../components/AttendanceCalendar';
+import { DatePickerModal } from '../components/DatePickerModal';
 
 export const Management: React.FC = () => {
   const { appUser } = useAuth();
+  const { academicYear } = useAcademicYear();
   const [activeTab, setActiveTab] = useState<'classes' | 'teachers' | 'students' | 'promotion' | 'holidays'>('classes');
   const [loading, setLoading] = useState(true);
   const [classes, setClasses] = useState<Class[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
+  const [students, setStudents] = useState<(Student & { displayClassId: string, displayDivisionId: string })[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedClassForStudent, setSelectedClassForStudent] = useState<string>('');
   const [selectedToClassForPromotion, setSelectedToClassForPromotion] = useState<string>('');
+  const [selectedToDivisionForPromotion, setSelectedToDivisionForPromotion] = useState<string>('');
+  const [selectedStudentsForPromotion, setSelectedStudentsForPromotion] = useState<Set<string>>(new Set());
+  const [selectedStudentsForPassOut, setSelectedStudentsForPassOut] = useState<Set<string>>(new Set());
+  const [fromDivisionId, setFromDivisionId] = useState<string>('');
   
   // Student Filters
   const [studentFilterClass, setStudentFilterClass] = useState<string>('');
@@ -35,25 +43,90 @@ export const Management: React.FC = () => {
     show: boolean;
     teacher: User | null;
   }>({ show: false, teacher: null });
+  const [studentActionModal, setStudentActionModal] = useState<{
+    show: boolean;
+    student: Student | null;
+    action: 'pass-out' | 'terminate' | null;
+  }>({ show: false, student: null, action: null });
+  const [calendarModal, setCalendarModal] = useState<{ show: boolean, student: Student | null }>({ show: false, student: null });
+  const [datePickerModal, setDatePickerModal] = useState<{ show: boolean }>({ show: false });
+  const [selectedHolidayDate, setSelectedHolidayDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [editingStartDate, setEditingStartDate] = useState<{ classId: string, date: string } | null>(null);
 
   const fetchData = async () => {
     if (!appUser) return;
     setLoading(true);
     try {
       const schoolId = appUser.schoolId;
+      const [startYear, endYear] = academicYear.split('-').map(Number);
+      const startOfAcademicYear = new Date(startYear, 5, 1); // June 1st
+      const endOfAcademicYear = new Date(endYear, 4, 31); // May 31st
       
       const [classesSnap, divisionsSnap, teachersSnap, studentsSnap, holidaysSnap] = await Promise.all([
         getDocs(query(collection(db, 'classes'), where('schoolId', '==', schoolId))),
         getDocs(query(collection(db, 'divisions'), where('schoolId', '==', schoolId))),
         getDocs(query(collection(db, 'users'), where('schoolId', '==', schoolId), where('role', 'in', ['teacher', 'it_coordinator']))),
-        getDocs(query(collection(db, 'students'), where('schoolId', '==', schoolId), where('status', '==', 'active'))),
+        getDocs(query(collection(db, 'students'), where('schoolId', '==', schoolId))),
         getDocs(query(collection(db, 'holidays'), where('schoolId', '==', schoolId)))
       ]);
 
-      setClasses(classesSnap.docs.map(doc => doc.data() as Class));
-      setDivisions(divisionsSnap.docs.map(doc => doc.data() as Division));
+      let configs: AcademicYearConfig[] = [];
+      try {
+        const configsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('academicYear', '==', academicYear)));
+        configs = configsSnap.docs.map(doc => doc.data() as AcademicYearConfig);
+      } catch (e) {
+        console.warn("Error fetching configs, might not exist yet", e);
+      }
+      
+      const classesData = classesSnap.docs.map(doc => {
+        const cls = doc.data() as Class;
+        const config = configs.find(c => c.classId === cls.classId && !c.divisionId);
+        return { ...cls, startDate: config?.startDate || cls.startDate };
+      });
+      setClasses(classesData);
+
+      const divisionsData = divisionsSnap.docs.map(doc => {
+        const div = doc.data() as Division;
+        const config = configs.find(c => c.divisionId === div.divisionId);
+        return { ...div, teacherId: config?.teacherId || div.teacherId };
+      });
+      setDivisions(divisionsData);
       setTeachers(teachersSnap.docs.map(doc => doc.data() as User));
-      setStudents(studentsSnap.docs.map(doc => doc.data() as Student));
+      
+      // Filter students based on academic year
+      const allStudents = studentsSnap.docs.map(doc => doc.data() as Student);
+      const filteredStudents = allStudents.reduce((acc, student) => {
+        let displayClassId = student.classId;
+        let displayDivisionId = student.divisionId;
+        let isEnrolled = true;
+
+        if (academicYear !== CURRENT_ACADEMIC_YEAR) {
+          const sortedHistory = [...student.classHistory].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+          const history = sortedHistory.find(h => {
+            const startDate = new Date(h.startDate);
+            const endDate = h.endDate ? new Date(h.endDate) : new Date(2099, 11, 31);
+            return startDate <= endOfAcademicYear && endDate >= startOfAcademicYear;
+          });
+
+          if (history) {
+            displayClassId = history.classId;
+            displayDivisionId = history.divisionId;
+          } else {
+            isEnrolled = false;
+          }
+        }
+
+        if (isEnrolled) {
+          acc.push({
+            ...student,
+            displayClassId,
+            displayDivisionId
+          });
+        }
+        return acc;
+      }, [] as (Student & { displayClassId: string, displayDivisionId: string })[]);
+
+      setStudents(filteredStudents);
       setHolidays(holidaysSnap.docs.map(doc => doc.data() as Holiday));
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'management_fetch');
@@ -64,11 +137,13 @@ export const Management: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [appUser]);
+  }, [appUser, academicYear]);
 
   const handleAddClass = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const name = new FormData(e.currentTarget).get('name') as string;
+    const formData = new FormData(e.currentTarget);
+    const name = formData.get('name') as string;
+    const startDate = formData.get('startDate') as string;
     if (!appUser || !name) return;
 
     try {
@@ -78,6 +153,16 @@ export const Management: React.FC = () => {
         schoolId: appUser.schoolId,
         name
       });
+      
+      const configId = `${appUser.schoolId}_${academicYear}_${classId}`;
+      await setDoc(doc(db, 'academicYearConfigs', configId), {
+        configId,
+        schoolId: appUser.schoolId,
+        academicYear,
+        classId,
+        startDate
+      });
+
       setSuccess('Class added successfully!');
       fetchData();
       (e.target as HTMLFormElement).reset();
@@ -96,15 +181,24 @@ export const Management: React.FC = () => {
 
     try {
       const divisionId = `DIV-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-      const divisionData: any = {
+      await setDoc(doc(db, 'divisions', divisionId), {
         divisionId,
         schoolId: appUser.schoolId,
         classId,
         name,
+      });
+      
+      const configId = `${appUser.schoolId}_${academicYear}_${divisionId}`;
+      const configData: any = {
+        configId,
+        schoolId: appUser.schoolId,
+        academicYear,
+        classId,
+        divisionId
       };
-      if (teacherId) divisionData.teacherId = teacherId;
+      if (teacherId) configData.teacherId = teacherId;
+      await setDoc(doc(db, 'academicYearConfigs', configId), configData);
 
-      await setDoc(doc(db, 'divisions', divisionId), divisionData);
       setSuccess('Division added successfully!');
       fetchData();
       (e.target as HTMLFormElement).reset();
@@ -162,10 +256,11 @@ export const Management: React.FC = () => {
     const formData = new FormData(e.currentTarget);
     const name = formData.get('name') as string;
     const admissionNumber = formData.get('admissionNumber') as string;
+    const admissionDate = formData.get('admissionDate') as string;
     const classId = formData.get('classId') as string;
     const divisionId = formData.get('divisionId') as string;
 
-    if (!appUser || !name || !admissionNumber || !classId || !divisionId) return;
+    if (!appUser || !name || !admissionNumber || !admissionDate || !classId || !divisionId) return;
 
     try {
       const studentId = `STU-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
@@ -176,7 +271,9 @@ export const Management: React.FC = () => {
         divisionId,
         name,
         admissionNumber,
-        status: 'active'
+        status: 'active',
+        admissionDate,
+        classHistory: [{ classId, divisionId, startDate: admissionDate }]
       });
       setSuccess('Student added successfully!');
       setSelectedClassForStudent('');
@@ -199,7 +296,7 @@ export const Management: React.FC = () => {
         let skipped = 0;
 
         results.data.forEach((row: any) => {
-          if (!row.name || !row.admissionNumber || !row.className || !row.divisionName) {
+          if (!row.name || !row.admissionNumber || !row.className || !row.divisionName || !row.admissionDate) {
             skipped++;
             return;
           }
@@ -222,6 +319,14 @@ export const Management: React.FC = () => {
             return;
           }
 
+          // Parse DD-MM-YYYY to YYYY-MM-DD
+          const dateParts = row.admissionDate.trim().split('-');
+          if (dateParts.length !== 3) {
+            skipped++;
+            return;
+          }
+          const formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+
           const studentId = `STU-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
           const studentRef = doc(db, 'students', studentId);
           batch.set(studentRef, {
@@ -231,7 +336,9 @@ export const Management: React.FC = () => {
             divisionId: targetDivision.divisionId,
             name: row.name,
             admissionNumber: row.admissionNumber,
-            status: 'active'
+            status: 'active',
+            admissionDate: formattedDate,
+            classHistory: [{ classId: targetClass.classId, divisionId: targetDivision.divisionId, startDate: formattedDate }]
           });
           count++;
         });
@@ -252,38 +359,90 @@ export const Management: React.FC = () => {
     });
   };
 
-  const handlePromoteStudents = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const fromDivisionId = formData.get('fromDivisionId') as string;
-    const toClassId = formData.get('toClassId') as string;
-    const toDivisionId = formData.get('toDivisionId') as string;
-    if (!fromDivisionId || !toClassId || !toDivisionId) return;
+  const handlePromoteStudents = async (promoteAll: boolean) => {
+    const promotionDate = (document.getElementById('promotionDate') as HTMLInputElement).value;
+    if (!fromDivisionId || !selectedToClassForPromotion || !selectedToDivisionForPromotion || !promotionDate) {
+      setError('Please select all promotion details and date.');
+      return;
+    }
 
     try {
-      const studentsToPromote = students.filter(s => s.divisionId === fromDivisionId);
+      const studentsToPromote = promoteAll 
+        ? students.filter(s => s.divisionId === fromDivisionId)
+        : students.filter(s => selectedStudentsForPromotion.has(s.studentId));
+
+      if (studentsToPromote.length === 0) {
+        setError('No students selected for promotion.');
+        return;
+      }
+
       const batch = writeBatch(db);
       studentsToPromote.forEach(s => {
         const studentRef = doc(db, 'students', s.studentId);
+        const newClassHistory = [...(s.classHistory || [])];
+        const lastHistory = newClassHistory[newClassHistory.length - 1];
+        if (lastHistory) {
+          lastHistory.endDate = promotionDate;
+        }
+        newClassHistory.push({
+          classId: selectedToClassForPromotion,
+          divisionId: selectedToDivisionForPromotion,
+          startDate: promotionDate
+        });
         batch.update(studentRef, {
-          classId: toClassId,
-          divisionId: toDivisionId
+          classId: selectedToClassForPromotion,
+          divisionId: selectedToDivisionForPromotion,
+          promotionDate: promotionDate,
+          classHistory: newClassHistory
         });
       });
       await batch.commit();
       setSuccess(`Promoted ${studentsToPromote.length} students!`);
       setSelectedToClassForPromotion('');
+      setSelectedToDivisionForPromotion('');
+      setSelectedStudentsForPromotion(new Set());
+      setFromDivisionId('');
       fetchData();
-      (e.target as HTMLFormElement).reset();
     } catch (err) {
       setError('Promotion failed.');
     }
   };
 
-  const handlePassOut = async (studentId: string) => {
+  const handlePassOutStudents = async () => {
+    const passoutDate = (document.getElementById('passoutDate') as HTMLInputElement).value;
+    if (selectedStudentsForPassOut.size === 0 || !passoutDate) {
+      setError('Please select students and a pass-out date.');
+      return;
+    }
     try {
-      await updateDoc(doc(db, 'students', studentId), { status: 'pass-out' });
+      const batch = writeBatch(db);
+      selectedStudentsForPassOut.forEach(studentId => {
+        const studentRef = doc(db, 'students', studentId);
+        batch.update(studentRef, { status: 'pass-out', passoutDate });
+      });
+      await batch.commit();
+      setSuccess(`Marked ${selectedStudentsForPassOut.size} students as pass-out!`);
+      setSelectedStudentsForPassOut(new Set());
+      fetchData();
+    } catch(err) {
+      setError('Failed to mark students as pass-out.');
+    }
+  };
+
+  const handlePassOut = async (studentId: string, passoutDate: string) => {
+    try {
+      await updateDoc(doc(db, 'students', studentId), { status: 'pass-out', passoutDate });
       setSuccess('Student marked as pass-out.');
+      fetchData();
+    } catch (err) {
+      setError('Failed to update student status.');
+    }
+  };
+
+  const handleTerminateStudent = async (studentId: string, terminationDate: string, terminationReason: string) => {
+    try {
+      await updateDoc(doc(db, 'students', studentId), { status: 'terminated', terminationDate, terminationReason });
+      setSuccess('Student marked as terminated.');
       fetchData();
     } catch (err) {
       setError('Failed to update student status.');
@@ -302,7 +461,14 @@ export const Management: React.FC = () => {
 
   const handleUpdateDivisionTeacher = async (divisionId: string, teacherId: string) => {
     try {
-      await updateDoc(doc(db, 'divisions', divisionId), { teacherId });
+      const configId = `${appUser!.schoolId}_${academicYear}_${divisionId}`;
+      await setDoc(doc(db, 'academicYearConfigs', configId), {
+        configId,
+        schoolId: appUser!.schoolId,
+        academicYear,
+        divisionId,
+        teacherId
+      }, { merge: true });
       setSuccess('Division teacher updated successfully');
       fetchData();
     } catch (err) {
@@ -315,7 +481,9 @@ export const Management: React.FC = () => {
     if (!resetModal.teacher) return;
 
     const formData = new FormData(e.currentTarget);
-    const newPassword = formData.get('newPassword') as string;
+    let newPassword = formData.get('newPassword') as string;
+
+    if (!newPassword) newPassword = 'Pass@123';
 
     if (newPassword.length < 6) {
       setError('Password must be at least 6 characters long');
@@ -388,9 +556,23 @@ export const Management: React.FC = () => {
   };
 
   const filteredStudents = students.filter(s => {
-    if (studentFilterClass && s.classId !== studentFilterClass) return false;
-    if (studentFilterDivision && s.divisionId !== studentFilterDivision) return false;
+    if (studentFilterClass && s.displayClassId !== studentFilterClass) return false;
+    if (studentFilterDivision && s.displayDivisionId !== studentFilterDivision) return false;
     return true;
+  }).sort((a, b) => {
+    const classA = classes.find(c => c.classId === a.displayClassId)?.name || "";
+    const classB = classes.find(c => c.classId === b.displayClassId)?.name || "";
+    if (classA !== classB) {
+        return classA.localeCompare(classB);
+    }
+
+    const divA = divisions.find(d => d.divisionId === a.displayDivisionId)?.name || "";
+    const divB = divisions.find(d => d.divisionId === b.displayDivisionId)?.name || "";
+    if (divA !== divB) {
+        return divA.localeCompare(divB);
+    }
+
+    return a.name.localeCompare(b.name);
   });
 
   if (loading) {
@@ -473,6 +655,12 @@ export const Management: React.FC = () => {
                     placeholder="e.g., Grade 1"
                     className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                  <input
+                    name="startDate"
+                    type="date"
+                    required
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
                   <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
                     <Plus className="h-4 w-4" /> Add Class
                   </button>
@@ -524,6 +712,7 @@ export const Management: React.FC = () => {
                 <form onSubmit={handleAddStudent} className="space-y-4">
                   <input name="name" required placeholder="Student Full Name" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
                   <input name="admissionNumber" required placeholder="Admission Number" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                  <input name="admissionDate" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
                   <select 
                     name="classId" 
                     required 
@@ -556,47 +745,159 @@ export const Management: React.FC = () => {
                   <input type="file" accept=".csv" onChange={handleCsvUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
                   <FileSpreadsheet className="h-10 w-10 text-gray-400 mx-auto mb-4" />
                   <p className="text-sm font-medium text-gray-900">Click to upload CSV</p>
-                  <p className="text-xs text-gray-500 mt-1">Format: name, admissionNumber, className, divisionName</p>
+                  <p className="text-xs text-gray-500 mt-1">Format: name, admissionNumber, className, divisionName, admissionDate (DD-MM-YYYY)</p>
                 </div>
+                <button
+                  onClick={() => {
+                    const csvContent = "name,admissionNumber,className,divisionName,admissionDate\nJohn Doe,A123,Grade 1,A,31-12-2025";
+                    const blob = new Blob([csvContent], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'student_sample.csv';
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                  }}
+                  className="mt-4 w-full text-xs font-bold text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Download Sample CSV
+                </button>
               </div>
             </div>
           )}
 
           {activeTab === 'promotion' && (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">Promote Cohort</h3>
-              <form onSubmit={handlePromoteStudents} className="space-y-4">
-                <select name="fromDivisionId" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
-                  <option value="">From Division</option>
-                  {divisions.map(d => <option key={d.divisionId} value={d.divisionId}>{classes.find(c => c.classId === d.classId)?.name} - {d.name}</option>)}
-                </select>
-                <div className="flex justify-center py-2">
-                  <ArrowRight className="h-6 w-6 text-gray-300" />
+            <div className="space-y-8">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900 mb-4">Promote Cohort</h3>
+                <div className="space-y-4">
+                  <select 
+                    value={fromDivisionId}
+                    onChange={(e) => {
+                      setFromDivisionId(e.target.value);
+                      setSelectedStudentsForPromotion(new Set());
+                    }}
+                    required 
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">From Division</option>
+                    {divisions.map(d => <option key={d.divisionId} value={d.divisionId}>{classes.find(c => c.classId === d.classId)?.name} - {d.name}</option>)}
+                  </select>
+
+                  <input id="promotionDate" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+
+                  {fromDivisionId && (
+                    <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
+                      {students.filter(s => s.divisionId === fromDivisionId).map(s => (
+                        <label key={s.studentId} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedStudentsForPromotion.has(s.studentId)}
+                            onChange={(e) => {
+                              const next = new Set(selectedStudentsForPromotion);
+                              if (e.target.checked) next.add(s.studentId);
+                              else next.delete(s.studentId);
+                              setSelectedStudentsForPromotion(next);
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{s.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-center py-2">
+                    <ArrowRight className="h-6 w-6 text-gray-300" />
+                  </div>
+                  <select 
+                    value={selectedToClassForPromotion}
+                    onChange={(e) => setSelectedToClassForPromotion(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">To Class</option>
+                    {classes.map(c => <option key={c.classId} value={c.classId}>{c.name}</option>)}
+                  </select>
+                  <select 
+                    value={selectedToDivisionForPromotion}
+                    onChange={(e) => setSelectedToDivisionForPromotion(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">To Division</option>
+                    {divisions
+                      .filter(d => !selectedToClassForPromotion || d.classId === selectedToClassForPromotion)
+                      .map(d => (
+                        <option key={d.divisionId} value={d.divisionId}>
+                          {classes.find(c => c.classId === d.classId)?.name} - {d.name}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => handlePromoteStudents(false)}
+                      className="flex-1 bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                    >
+                      Promote Selected
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => handlePromoteStudents(true)}
+                      className="flex-1 bg-blue-100 text-blue-700 py-2.5 rounded-xl font-bold hover:bg-blue-200 transition-all flex items-center justify-center gap-2"
+                    >
+                      Promote All
+                    </button>
+                  </div>
                 </div>
-                <select 
-                  name="toClassId" 
-                  required 
-                  value={selectedToClassForPromotion}
-                  onChange={(e) => setSelectedToClassForPromotion(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <option value="">To Class</option>
-                  {classes.map(c => <option key={c.classId} value={c.classId}>{c.name}</option>)}
-                </select>
-                <select name="toDivisionId" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
-                  <option value="">To Division</option>
-                  {divisions
-                    .filter(d => !selectedToClassForPromotion || d.classId === selectedToClassForPromotion)
-                    .map(d => (
-                      <option key={d.divisionId} value={d.divisionId}>
-                        {classes.find(c => c.classId === d.classId)?.name} - {d.name}
-                      </option>
-                    ))}
-                </select>
-                <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
-                  <GraduationCap className="h-4 w-4" /> Promote Students
-                </button>
-              </form>
+              </div>
+
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900 mb-4">Pass-out Cohort</h3>
+                <div className="space-y-4">
+                  <select 
+                    value={fromDivisionId}
+                    onChange={(e) => {
+                      setFromDivisionId(e.target.value);
+                      setSelectedStudentsForPassOut(new Set());
+                    }}
+                    required 
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                  >
+                    <option value="">Select Division</option>
+                    {divisions.map(d => <option key={d.divisionId} value={d.divisionId}>{classes.find(c => c.classId === d.classId)?.name} - {d.name}</option>)}
+                  </select>
+
+                  <input id="passoutDate" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+
+                  {fromDivisionId && (
+                    <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
+                      {students.filter(s => s.divisionId === fromDivisionId).map(s => (
+                        <label key={s.studentId} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedStudentsForPassOut.has(s.studentId)}
+                            onChange={(e) => {
+                              const next = new Set(selectedStudentsForPassOut);
+                              if (e.target.checked) next.add(s.studentId);
+                              else next.delete(s.studentId);
+                              setSelectedStudentsForPassOut(next);
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{s.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  <button 
+                    type="button"
+                    onClick={handlePassOutStudents}
+                    className="w-full bg-orange-600 text-white py-2.5 rounded-xl font-bold hover:bg-orange-700 transition-all flex items-center justify-center gap-2"
+                  >
+                    Mark Pass-out
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -606,7 +907,15 @@ export const Management: React.FC = () => {
               <form onSubmit={handleAddHoliday} className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 ml-1">Date</label>
-                  <input name="date" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+                  <input type="hidden" name="date" value={selectedHolidayDate} />
+                  <button
+                    type="button"
+                    onClick={() => setDatePickerModal({ show: true })}
+                    className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none flex items-center justify-between text-gray-700 hover:bg-gray-100 transition-colors"
+                  >
+                    {format(parseISO(selectedHolidayDate), 'MMMM do, yyyy')}
+                    <Calendar className="h-4 w-4 text-gray-400" />
+                  </button>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-gray-500 ml-1">Type</label>
@@ -675,25 +984,63 @@ export const Management: React.FC = () => {
                 <div key={cls.classId} className="p-6">
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="font-bold text-gray-900 text-lg">{cls.name}</h4>
-                    <button onClick={() => {
-                      setConfirmModal({
-                        show: true,
-                        title: 'Delete Class',
-                        message: `Are you sure you want to delete ${cls.name} and all its divisions? This action cannot be undone.`,
-                        onConfirm: async () => {
-                          try {
-                            await deleteDoc(doc(db, 'classes', cls.classId));
-                            setSuccess('Class deleted successfully');
-                            fetchData();
-                          } catch (err) {
-                            setError('Failed to delete class');
+                    <div className="flex items-center gap-2">
+                      {editingStartDate?.classId === cls.classId ? (
+                        <div className="flex items-center gap-2">
+                          <input 
+                            type="date" 
+                            value={editingStartDate.date}
+                            onChange={(e) => setEditingStartDate({...editingStartDate, date: e.target.value})}
+                            className="text-xs border border-gray-300 rounded p-1"
+                          />
+                          <button onClick={async () => {
+                            try {
+                              const configId = `${appUser!.schoolId}_${academicYear}_${cls.classId}`;
+                              await setDoc(doc(db, 'academicYearConfigs', configId), {
+                                configId,
+                                schoolId: appUser!.schoolId,
+                                academicYear,
+                                classId: cls.classId,
+                                startDate: editingStartDate.date
+                              }, { merge: true });
+                              setSuccess('Start date updated');
+                              fetchData();
+                              setEditingStartDate(null);
+                            } catch (err) {
+                              setError('Failed to update start date');
+                            }
+                          }} className="text-green-500 hover:bg-green-50 p-2 rounded-lg transition-colors">
+                            <CheckCircle2 className="h-4 w-4" />
+                          </button>
+                          <button onClick={() => setEditingStartDate(null)} className="text-gray-500 hover:bg-gray-50 p-2 rounded-lg transition-colors">
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setEditingStartDate({ classId: cls.classId, date: cls.startDate || '' })} className="text-blue-500 hover:bg-blue-50 p-2 rounded-lg transition-colors">
+                          <Calendar className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button onClick={() => {
+                        setConfirmModal({
+                          show: true,
+                          title: 'Delete Class',
+                          message: `Are you sure you want to delete ${cls.name} and all its divisions? This action cannot be undone.`,
+                          onConfirm: async () => {
+                            try {
+                              await deleteDoc(doc(db, 'classes', cls.classId));
+                              setSuccess('Class deleted successfully');
+                              fetchData();
+                            } catch (err) {
+                              setError('Failed to delete class');
+                            }
+                            setConfirmModal(prev => ({ ...prev, show: false }));
                           }
-                          setConfirmModal(prev => ({ ...prev, show: false }));
-                        }
-                      });
-                    }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                        });
+                      }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {divisions.filter(d => d.classId === cls.classId).map(div => (
@@ -824,18 +1171,30 @@ export const Management: React.FC = () => {
                       {student.name.charAt(0)}
                     </div>
                     <div>
-                      <p className="font-bold text-gray-900">{student.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {classes.find(c => c.classId === student.classId)?.name} - {divisions.find(d => d.divisionId === student.divisionId)?.name} | ID: {student.admissionNumber}
+                      <p 
+                        className="font-bold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors"
+                        onClick={() => setCalendarModal({ show: true, student })}
+                      >
+                        {student.name}
                       </p>
+                      <p className="text-xs text-gray-500">
+                        {classes.find(c => c.classId === student.displayClassId)?.name} - {divisions.find(d => d.divisionId === student.displayDivisionId)?.name} | ID: {student.admissionNumber}
+                      </p>
+                      {student.status === 'terminated' && (
+                        <p className="text-xs text-red-600 font-bold mt-1">
+                          Removed from the roll as on {student.terminationDate} due to {student.terminationReason}
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handlePassOut(student.studentId)}
-                    className="text-xs font-bold text-orange-600 bg-orange-50 px-3 py-1.5 rounded-lg hover:bg-orange-100 transition-colors"
-                  >
-                    Mark Pass-out
-                  </button>
+                  {student.status !== 'terminated' && (
+                    <button
+                      onClick={() => setStudentActionModal({ show: true, student, action: 'terminate' })}
+                      className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors"
+                    >
+                      Terminate
+                    </button>
+                  )}
                 </div>
               ))}
 
@@ -889,8 +1248,7 @@ export const Management: React.FC = () => {
               <input
                 name="newPassword"
                 type="password"
-                required
-                placeholder="New Default Password"
+                placeholder="New Default Password (default: Pass@123)"
                 className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
               />
               <div className="flex gap-3">
@@ -940,6 +1298,57 @@ export const Management: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Student Action Modal */}
+      {studentActionModal.show && studentActionModal.student && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in duration-200">
+            <h3 className="text-xl font-bold text-gray-900 mb-4">
+              {studentActionModal.action === 'pass-out' ? 'Mark Pass-out' : 'Terminate Student'}
+            </h3>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const date = formData.get('date') as string;
+              if (studentActionModal.action === 'pass-out') {
+                handlePassOut(studentActionModal.student!.studentId, date);
+              } else {
+                const reason = formData.get('reason') as string;
+                handleTerminateStudent(studentActionModal.student!.studentId, date, reason);
+              }
+              setStudentActionModal({ show: false, student: null, action: null });
+            }} className="space-y-4">
+              <input name="date" type="date" required className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              {studentActionModal.action === 'terminate' && (
+                <input name="reason" required placeholder="Reason for termination" className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none" />
+              )}
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setStudentActionModal({ show: false, student: null, action: null })} className="flex-1 px-4 py-2.5 rounded-xl font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-all">Cancel</button>
+                <button type="submit" className="flex-1 px-4 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-lg shadow-blue-200">Confirm</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {calendarModal.show && calendarModal.student && (
+        <AttendanceCalendar
+          student={calendarModal.student}
+          className={classes.find(c => c.classId === (calendarModal.student as any).displayClassId)?.name || 'Unknown'}
+          divisionName={divisions.find(d => d.divisionId === (calendarModal.student as any).displayDivisionId)?.name || 'Unknown'}
+          onClose={() => setCalendarModal({ show: false, student: null })}
+        />
+      )}
+      {datePickerModal.show && (
+        <DatePickerModal
+          selectedDate={selectedHolidayDate}
+          onSelectDate={(date) => {
+            setSelectedHolidayDate(date);
+            setDatePickerModal({ show: false });
+          }}
+          onClose={() => setDatePickerModal({ show: false })}
+          holidays={holidays}
+        />
       )}
     </div>
   );

@@ -26,9 +26,8 @@ export const Register: React.FC = () => {
     const password = formData.get('password') as string;
 
     try {
-      // 1. Create Auth User (using schoolCode as login ID)
-      const loginEmail = `${schoolCode}@attendify.com`;
-      const userCredential = await createUserWithEmailAndPassword(auth, loginEmail, password);
+      // 1. Create Auth User (using the provided email)
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const uid = userCredential.user.uid;
 
       // 2. Create School Record
@@ -39,10 +38,10 @@ export const Register: React.FC = () => {
         address,
         contactPerson,
         schoolCode,
+        email, // Save the original email
         createdBy: uid,
         createdAt: new Date().toISOString(),
       };
-      if (email) schoolData.email = email;
 
       await setDoc(doc(db, 'schools', schoolId), schoolData);
 
@@ -62,7 +61,7 @@ export const Register: React.FC = () => {
       setTimeout(() => navigate('/dashboard'), 2000);
     } catch (err: any) {
       if (err.code === 'auth/email-already-in-use') {
-        setError('This School Code is already registered. Please try logging in instead.');
+        setError('This email is already registered. Please try logging in instead.');
       } else {
         setError(err.message || 'Registration failed. Please try again.');
       }

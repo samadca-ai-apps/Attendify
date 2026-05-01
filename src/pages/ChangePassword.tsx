@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updatePassword } from 'firebase/auth';
+import { updatePassword, reauthenticateWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Lock, ShieldCheck, AlertCircle, ArrowRight } from 'lucide-react';
 
@@ -38,13 +38,33 @@ export const ChangePassword: React.FC = () => {
       await updatePassword(user, newPassword);
 
       // 2. Update Firestore flag
-      await updateDoc(doc(db, 'users', user.uid), {
-        firstLogin: false
-      });
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          firstLogin: false
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
+      }
 
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Failed to update password. You may need to re-authenticate.');
+      if (err.code === 'auth/requires-recent-login') {
+        try {
+          // Re-authenticate with Google
+          const provider = new GoogleAuthProvider();
+          await reauthenticateWithPopup(user, provider);
+          // Retry password update
+          await updatePassword(user, newPassword);
+          await updateDoc(doc(db, 'users', user.uid), {
+            firstLogin: false
+          });
+          navigate('/dashboard');
+        } catch (reauthErr: any) {
+          setError('Re-authentication failed. Please try logging out and logging back in.');
+        }
+      } else {
+        setError(err.message || 'Failed to update password.');
+      }
     } finally {
       setLoading(false);
     }
@@ -109,6 +129,15 @@ export const ChangePassword: React.FC = () => {
               </>
             )}
           </button>
+          {!appUser?.firstLogin && (
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="w-full bg-gray-100 text-gray-700 py-4 rounded-xl font-bold text-lg hover:bg-gray-200 transition-all"
+            >
+              Cancel
+            </button>
+          )}
         </form>
       </div>
     </div>

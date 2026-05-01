@@ -22,11 +22,12 @@ export const Login: React.FC = () => {
     const password = formData.get('password') as string;
 
     try {
-      const loginEmail = `${loginId}@attendify.com`;
+      // If the input contains '@', treat it as an email, otherwise construct the teacher email
+      const loginEmail = loginId.includes('@') ? loginId : `${loginId}@attendify.com`;
       await signInWithEmailAndPassword(auth, loginEmail, password);
       navigate(from, { replace: true });
     } catch (err: any) {
-      setError('Invalid School Code/Teacher ID or password.');
+      setError('Invalid email/ID or password.');
     } finally {
       setLoading(false);
     }
@@ -40,7 +41,7 @@ export const Login: React.FC = () => {
             <ClipboardCheck className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Sign In</h1>
-          <p className="text-gray-500 text-center mt-2">Enter your School Code/Teacher ID and password to access your account.</p>
+          <p className="text-gray-500 text-center mt-2">Enter your School Email/ Teacher ID and password to access your account.</p>
         </div>
 
         {error && (
@@ -57,7 +58,7 @@ export const Login: React.FC = () => {
                 name="loginId"
                 type="text"
                 required
-                placeholder="School Code / Teacher ID"
+                placeholder="School Email/ Teacher ID"
                 className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
               />
             </div>
@@ -89,6 +90,12 @@ export const Login: React.FC = () => {
             )}
           </button>
         </form>
+
+        <div className="mt-4 text-center">
+          <Link to="/forgot-password" className="text-sm text-blue-600 font-semibold hover:text-blue-700">
+            Forgot Password?
+          </Link>
+        </div>
 
         <div className="mt-8 text-center">
           <p className="text-gray-500 text-sm">

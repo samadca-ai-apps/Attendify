@@ -2,12 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, where, getDocs, limit, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { Attendance, Student, Class, Division } from '../types';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { Attendance, Student, Class, Division, Holiday } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
 import { Users, BookOpen, ClipboardCheck, TrendingUp, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { isSaturday } from 'date-fns';
 
 export const Dashboard: React.FC = () => {
   const { appUser } = useAuth();
+  const { academicYear } = useAcademicYear();
   const [stats, setStats] = useState({
     totalStudents: 0,
     totalClasses: 0,
@@ -16,6 +19,7 @@ export const Dashboard: React.FC = () => {
     chartData: [] as { date: string, present: number }[],
   });
   const [loading, setLoading] = useState(true);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
 
   useEffect(() => {
     if (!appUser) {
@@ -23,18 +27,29 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
-    const fetchStats = async () => {
+    const fetchData = async () => {
       try {
         const schoolId = appUser.schoolId;
+        const [startYear, endYear] = academicYear.split('-').map(Number);
 
         // 1. Total Students
         const studentsQuery = query(
           collection(db, 'students'),
-          where('schoolId', '==', schoolId),
-          where('status', '==', 'active')
+          where('schoolId', '==', schoolId)
         );
         const studentsSnap = await getDocs(studentsQuery);
-        const totalStudents = studentsSnap.size;
+        
+        // Filter students based on academic year
+        const students = studentsSnap.docs.map(doc => doc.data() as Student);
+        const filteredStudents = students.filter(student => {
+          const admissionDate = new Date(student.admissionDate);
+          const startOfAcademicYear = new Date(startYear, 5, 1); // June 1st
+          const endOfAcademicYear = new Date(endYear, 4, 31); // May 31st
+          
+          return admissionDate <= endOfAcademicYear && 
+                 (!student.passoutDate || new Date(student.passoutDate) >= startOfAcademicYear);
+        });
+        const totalStudents = filteredStudents.length;
 
         // 2. Total Classes
         const classesQuery = query(
@@ -44,39 +59,69 @@ export const Dashboard: React.FC = () => {
         const classesSnap = await getDocs(classesQuery);
         const totalClasses = classesSnap.size;
 
+        // 3. Holidays
+        const holidaysSnap = await getDocs(query(collection(db, 'holidays'), where('schoolId', '==', schoolId)));
+        const holidaysData = holidaysSnap.docs.map(doc => doc.data() as Holiday);
+        setHolidays(holidaysData);
+
         setStats(prev => ({ ...prev, totalStudents, totalClasses }));
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, 'dashboard_static_stats');
       }
     };
 
-    fetchStats();
+    fetchData();
 
-    // 3. Real-time Attendance
+    // 4. Real-time Attendance
     const attendanceQuery = query(
       collection(db, 'attendance'),
       where('schoolId', '==', appUser.schoolId),
       orderBy('date', 'desc'),
-      limit(30) // Fetch more to aggregate by date
+      limit(60) // Fetch more to aggregate by date
     );
 
     const unsubscribe = onSnapshot(attendanceQuery, (snapshot) => {
       const allRecent = snapshot.docs.map(doc => doc.data() as Attendance);
       
+      // Filter attendance by academic year
+      const [startYear, endYear] = academicYear.split('-').map(Number);
+      const startOfAcademicYear = new Date(startYear, 5, 1); // June 1st
+      const endOfAcademicYear = new Date(endYear, 4, 31); // May 31st
+      
+      const filteredAttendance = allRecent.filter(record => {
+        const date = new Date(record.date);
+        return date >= startOfAcademicYear && date <= endOfAcademicYear;
+      });
+
       // Aggregate by date for chart
       const aggregatedByDate: Record<string, { present: number, total: number }> = {};
       
-      allRecent.forEach(record => {
+      const getPresentUnits = (status: string) => {
+        if (status === 'full_day') return 1;
+        if (status === 'fn_only' || status === 'an_only') return 0.5;
+        return 0;
+      };
+
+      filteredAttendance.forEach(record => {
         if (!aggregatedByDate[record.date]) {
           aggregatedByDate[record.date] = { present: 0, total: 0 };
         }
-        const presentCount = record.records.filter(r => r.status === 'present').length;
+        const presentCount = record.records.reduce((acc, r) => acc + getPresentUnits(r.status), 0);
         aggregatedByDate[record.date].present += presentCount;
         aggregatedByDate[record.date].total += record.records.length;
       });
 
       const sortedDates = Object.keys(aggregatedByDate).sort().reverse();
-      const latestDates = sortedDates.slice(0, 7);
+      
+      // Filter out non-working Saturdays
+      const filteredDates = sortedDates.filter(dateStr => {
+        const date = new Date(dateStr);
+        if (!isSaturday(date)) return true;
+        const holiday = holidays.find(h => h.date === dateStr);
+        return holiday && holiday.type === 'working_saturday';
+      });
+
+      const latestDates = filteredDates.slice(0, 7);
       
       const chartData = latestDates.map(date => ({
         date,
@@ -85,16 +130,16 @@ export const Dashboard: React.FC = () => {
 
       // Calculate average attendance from all fetched records
       let avgAttendance = 0;
-      if (allRecent.length > 0) {
-        const totalPresent = allRecent.reduce((acc, curr) => acc + curr.records.filter(r => r.status === 'present').length, 0);
-        const totalStudents = allRecent.reduce((acc, curr) => acc + curr.records.length, 0);
+      if (filteredAttendance.length > 0) {
+        const totalPresent = filteredAttendance.reduce((acc, curr) => acc + curr.records.reduce((a, r) => a + getPresentUnits(r.status), 0), 0);
+        const totalStudents = filteredAttendance.reduce((acc, curr) => acc + curr.records.length, 0);
         avgAttendance = Math.round((totalPresent / totalStudents) * 100);
       }
 
       setStats(prev => ({
         ...prev,
         avgAttendance,
-        recentAttendance: allRecent.slice(0, 7),
+        recentAttendance: filteredAttendance.slice(0, 7),
         chartData
       }));
       setLoading(false);
@@ -104,7 +149,7 @@ export const Dashboard: React.FC = () => {
     });
 
     return () => unsubscribe();
-  }, [appUser]);
+  }, [appUser, academicYear]);
 
   if (loading) {
     return (
