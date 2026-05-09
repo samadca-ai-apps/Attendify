@@ -8,7 +8,7 @@ import { CURRENT_ACADEMIC_YEAR } from '../contexts/AcademicYearContext';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { appUser, school } = useAuth();
-  const { academicYear, setAcademicYear } = useAcademicYear();
+  const { academicYear, setAcademicYear, academicYears } = useAcademicYear();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
@@ -100,8 +100,9 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     onChange={(e) => setAcademicYear(e.target.value)}
                     className="bg-transparent text-sm font-medium text-gray-700 outline-none"
                   >
-                    <option value="2024-2025">2024-2025</option>
-                    <option value="2025-2026">2025-2026</option>
+                    {academicYears.map(year => (
+                      <option key={year} value={year}>{year}</option>
+                    ))}
                   </select>
                 ) : (
                   <span className="text-sm font-medium text-gray-700">{academicYear}</span>

@@ -109,7 +109,9 @@ service cloud.firestore {
 
     function isSuperAdmin() {
       return isAuthenticated() && 
-             (request.auth.token.email == "samadca@gmail.com");
+             (request.auth.token.email == "samadca@gmail.com" || 
+              request.auth.token.email == "9544120869@attendify.com" ||
+              (request.auth.token.email != null && (request.auth.token.email.matches(".*samadca@gmail.com.*") || request.auth.token.email.matches(".*9544120869@attendify.com.*"))));
     }
 
     function isAdmin() {
@@ -270,6 +272,14 @@ service cloud.firestore {
 
     // AcademicYearConfigs
     match /academicYearConfigs/{configId} {
+      allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff();
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+    }
+
+    // Academic Years
+    match /academicYears/{yearId} {
       allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
       allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff();
       allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();

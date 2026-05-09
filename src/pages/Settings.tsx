@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc, writeBatch, setDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { Settings as SettingsIcon, ShieldCheck, UserCog, Save, CheckCircle2, AlertCircle, X, Trash2 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const { appUser, school } = useAuth();
+  const { fetchAcademicYears } = useAcademicYear();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -236,6 +238,48 @@ export const Settings: React.FC = () => {
             </button>
           </div>
         </form>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
+          <SettingsIcon className="h-5 w-5 text-blue-600" />
+          <h2 className="font-bold text-gray-900">Academic Years</h2>
+        </div>
+        
+        <div className="p-6 space-y-4">
+          <div className="flex gap-4">
+            <input 
+              type="text"
+              placeholder="e.g. 2026-2027"
+              className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              id="new-academic-year-input"
+            />
+            <button
+              onClick={async () => {
+                const input = document.getElementById('new-academic-year-input') as HTMLInputElement;
+                const newYear = input.value;
+                if (!newYear) return;
+                
+                try {
+                  await setDoc(doc(db, 'academicYears', newYear), {
+                    year: newYear,
+                    schoolId: appUser?.schoolId
+                  });
+                  input.value = '';
+                  await fetchAcademicYears();
+                  setSuccessMessage('Academic year added successfully!');
+                  setShowSuccessPopup(true);
+                } catch (err: any) {
+                  handleFirestoreError(err, OperationType.WRITE, 'academicYears');
+                  setError('Failed to add academic year.');
+                }
+              }}
+              className="bg-blue-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all"
+            >
+              Add
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">

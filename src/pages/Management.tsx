@@ -7,9 +7,10 @@ import { useAcademicYear, CURRENT_ACADEMIC_YEAR } from '../contexts/AcademicYear
 import { Class, Division, User, Student, Holiday, AcademicYearConfig } from '../types';
 import { Plus, Trash2, UserPlus, Upload, Download, GraduationCap, ArrowRight, CheckCircle2, AlertCircle, FileSpreadsheet, BookOpen, Users, X, ShieldCheck, UserCog, Calendar, Save } from 'lucide-react';
 import Papa from 'papaparse';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, addDays } from 'date-fns';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
 import { DatePickerModal } from '../components/DatePickerModal';
+import { EditStudentModal } from '../components/EditStudentModal';
 
 export const Management: React.FC = () => {
   const { appUser } = useAuth();
@@ -29,6 +30,7 @@ export const Management: React.FC = () => {
   const [selectedStudentsForPromotion, setSelectedStudentsForPromotion] = useState<Set<string>>(new Set());
   const [selectedStudentsForPassOut, setSelectedStudentsForPassOut] = useState<Set<string>>(new Set());
   const [fromDivisionId, setFromDivisionId] = useState<string>('');
+  const [nextYearDivisions, setNextYearDivisions] = useState<Division[]>([]);
   
   // Student Filters
   const [studentFilterClass, setStudentFilterClass] = useState<string>('');
@@ -43,11 +45,13 @@ export const Management: React.FC = () => {
     show: boolean;
     teacher: User | null;
   }>({ show: false, teacher: null });
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [studentActionModal, setStudentActionModal] = useState<{
     show: boolean;
     student: Student | null;
-    action: 'pass-out' | 'terminate' | null;
+    action: 'pass-out' | 'terminate' | 'edit' | null;
   }>({ show: false, student: null, action: null });
+  const [deleteDivisionModal, setDeleteDivisionModal] = useState<{ show: boolean, division: Division | null }>({ show: false, division: null });
   const [calendarModal, setCalendarModal] = useState<{ show: boolean, student: Student | null }>({ show: false, student: null });
   const [datePickerModal, setDatePickerModal] = useState<{ show: boolean }>({ show: false });
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
@@ -78,19 +82,35 @@ export const Management: React.FC = () => {
         console.warn("Error fetching configs, might not exist yet", e);
       }
       
+      // Fetch next year divisions
+      const nextAcademicYear = `${startYear + 1}-${startYear + 2}`;
+      let nextConfigs: AcademicYearConfig[] = [];
+      try {
+        const nextConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('academicYear', '==', nextAcademicYear)));
+        nextConfigs = nextConfigsSnap.docs.map(doc => doc.data() as AcademicYearConfig);
+      } catch (e) {
+        console.warn("Error fetching next year configs", e);
+      }
+      
       const classesData = classesSnap.docs.map(doc => {
         const cls = doc.data() as Class;
         const config = configs.find(c => c.classId === cls.classId && !c.divisionId);
         return { ...cls, startDate: config?.startDate || cls.startDate };
       });
       setClasses(classesData);
-
-      const divisionsData = divisionsSnap.docs.map(doc => {
-        const div = doc.data() as Division;
+      
+      const divisionsDataRaw = divisionsSnap.docs.map(doc => doc.data() as Division);
+      
+      const divisionsData = divisionsDataRaw.map(div => {
         const config = configs.find(c => c.divisionId === div.divisionId);
         return { ...div, teacherId: config?.teacherId || div.teacherId };
-      });
+      }).filter(d => configs.some(c => c.divisionId === d.divisionId));
       setDivisions(divisionsData);
+      
+      const nextYearDivisions = divisionsDataRaw
+        .filter(d => nextConfigs.some(c => c.divisionId === d.divisionId));
+      setNextYearDivisions(nextYearDivisions);
+      
       setTeachers(teachersSnap.docs.map(doc => doc.data() as User));
       
       // Filter students based on academic year
@@ -98,22 +118,21 @@ export const Management: React.FC = () => {
       const filteredStudents = allStudents.reduce((acc, student) => {
         let displayClassId = student.classId;
         let displayDivisionId = student.divisionId;
-        let isEnrolled = true;
+        let isEnrolled = false;
 
-        if (academicYear !== CURRENT_ACADEMIC_YEAR) {
-          const sortedHistory = [...student.classHistory].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
-          const history = sortedHistory.find(h => {
-            const startDate = new Date(h.startDate);
-            const endDate = h.endDate ? new Date(h.endDate) : new Date(2099, 11, 31);
-            return startDate <= endOfAcademicYear && endDate >= startOfAcademicYear;
-          });
+        const sortedHistory = [...(student.classHistory || [])].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+        const history = sortedHistory.find(h => {
+          const startDate = new Date(h.startDate);
+          const endDate = h.endDate ? new Date(h.endDate) : new Date(2099, 11, 31);
+          return startDate <= endOfAcademicYear && endDate >= startOfAcademicYear;
+        });
 
-          if (history) {
-            displayClassId = history.classId;
-            displayDivisionId = history.divisionId;
-          } else {
-            isEnrolled = false;
-          }
+        if (history) {
+          displayClassId = history.classId;
+          displayDivisionId = history.divisionId;
+          isEnrolled = true;
+        } else if (academicYear === CURRENT_ACADEMIC_YEAR && student.status === 'active') {
+          isEnrolled = true;
         }
 
         if (isEnrolled) {
@@ -187,17 +206,28 @@ export const Management: React.FC = () => {
         classId,
         name,
       });
+
+      const allConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', appUser.schoolId)));
+      const uniqueYears = Array.from(new Set(allConfigsSnap.docs.map(doc => (doc.data() as AcademicYearConfig).academicYear)));
+      const currentStartYear = parseInt(academicYear.split('-')[0]);
+
+      const batch = writeBatch(db);
       
-      const configId = `${appUser.schoolId}_${academicYear}_${divisionId}`;
-      const configData: any = {
-        configId,
-        schoolId: appUser.schoolId,
-        academicYear,
-        classId,
-        divisionId
-      };
-      if (teacherId) configData.teacherId = teacherId;
-      await setDoc(doc(db, 'academicYearConfigs', configId), configData);
+      uniqueYears.forEach(year => {
+        const startYear = parseInt(year.split('-')[0]);
+        if (startYear >= currentStartYear) {
+            const configId = `${appUser.schoolId}_${year}_${divisionId}`;
+            batch.set(doc(db, 'academicYearConfigs', configId), {
+                configId,
+                schoolId: appUser.schoolId,
+                academicYear: year,
+                classId,
+                divisionId,
+                ...(teacherId ? { teacherId } : {})
+            });
+        }
+      });
+      await batch.commit();
 
       setSuccess('Division added successfully!');
       fetchData();
@@ -384,10 +414,11 @@ export const Management: React.FC = () => {
         if (lastHistory) {
           lastHistory.endDate = promotionDate;
         }
+        const nextDate = addDays(parseISO(promotionDate), 1);
         newClassHistory.push({
           classId: selectedToClassForPromotion,
           divisionId: selectedToDivisionForPromotion,
-          startDate: promotionDate
+          startDate: format(nextDate, 'yyyy-MM-dd')
         });
         batch.update(studentRef, {
           classId: selectedToClassForPromotion,
@@ -552,6 +583,90 @@ export const Management: React.FC = () => {
       fetchData();
     } catch (err) {
       setError('Failed to delete holiday.');
+    }
+  };
+
+  const handleImportDivisions = async () => {
+    try {
+        setLoading(true);
+        const [startYear] = academicYear.split('-').map(Number);
+        const prevYear = `${startYear - 1}-${startYear}`;
+
+        const prevConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', appUser!.schoolId), where('academicYear', '==', prevYear)));
+        const prevConfigs = prevConfigsSnap.docs.map(doc => doc.data() as AcademicYearConfig);
+        
+        if (prevConfigs.length === 0) {
+            setError('No divisions found for academic year ' + prevYear);
+            setLoading(false);
+            return;
+        }
+
+        const batch = writeBatch(db);
+        prevConfigs.forEach(prevConfig => {
+            if (!prevConfig.divisionId) return; // Skip configs without a divisionId
+            const configId = `${appUser!.schoolId}_${academicYear}_${prevConfig.divisionId}`;
+            batch.set(doc(db, 'academicYearConfigs', configId), {
+                configId,
+                schoolId: appUser!.schoolId,
+                academicYear,
+                classId: prevConfig.classId,
+                divisionId: prevConfig.divisionId,
+                teacherId: prevConfig.teacherId || null
+            });
+        });
+        
+        await batch.commit();
+        setSuccess('Divisions imported from ' + prevYear);
+        fetchData();
+    } catch (err: any) {
+        handleFirestoreError(err, OperationType.WRITE, 'academicYearConfigs');
+        setError('Failed to import divisions.');
+        setLoading(false);
+    }
+  };
+
+  const handleDeleteDivision = async (division: Division, option: 'thisYear' | 'thisYearForward' | 'allYears') => {
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+      const schoolId = appUser!.schoolId;
+      
+      // Get all configs for this division
+      const configsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('divisionId', '==', division.divisionId)));
+      const configs = configsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() as AcademicYearConfig }));
+
+      const currentStartYear = parseInt(academicYear.split('-')[0]);
+
+      if (option === 'thisYear') {
+        const config = configs.find(c => c.academicYear === academicYear);
+        if (config) batch.delete(doc(db, 'academicYearConfigs', config.id));
+      } else if (option === 'thisYearForward') {
+        configs.forEach(c => {
+          const configStartYear = parseInt(c.academicYear.split('-')[0]);
+          if (configStartYear >= currentStartYear) {
+            batch.delete(doc(db, 'academicYearConfigs', c.id));
+          }
+        });
+      } else if (option === 'allYears') {
+        configs.forEach(c => batch.delete(doc(db, 'academicYearConfigs', c.id)));
+        batch.delete(doc(db, 'divisions', division.divisionId));
+      }
+
+      await batch.commit();
+
+      // Check if any configs remain, if not, delete the division doc
+      const remainingConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('divisionId', '==', division.divisionId)));
+      if (remainingConfigsSnap.empty) {
+        await deleteDoc(doc(db, 'divisions', division.divisionId));
+      }
+
+      setSuccess('Division deletion process completed.');
+      setDeleteDivisionModal({ show: false, division: null });
+      fetchData();
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.DELETE, 'divisions');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -824,7 +939,7 @@ export const Management: React.FC = () => {
                     className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                   >
                     <option value="">To Division</option>
-                    {divisions
+                    {nextYearDivisions
                       .filter(d => !selectedToClassForPromotion || d.classId === selectedToClassForPromotion)
                       .map(d => (
                         <option key={d.divisionId} value={d.divisionId}>
@@ -952,6 +1067,11 @@ export const Management: React.FC = () => {
                 {activeTab === 'promotion' && 'Promotion History'}
                 {activeTab === 'holidays' && 'Holiday Records'}
               </h3>
+              {activeTab === 'classes' && divisions.length === 0 && (
+                <button onClick={handleImportDivisions} className="text-xs bg-blue-600 text-white rounded-lg px-3 py-1.5 hover:bg-blue-700 transition-colors">
+                    Import Divisions from Previous Year
+                </button>
+              )}
               {activeTab === 'students' && (
                 <div className="flex items-center gap-2">
                   <select 
@@ -1061,23 +1181,7 @@ export const Management: React.FC = () => {
                             </select>
                           </div>
                         </div>
-                        <button onClick={() => {
-                          setConfirmModal({
-                            show: true,
-                            title: 'Delete Division',
-                            message: `Are you sure you want to delete Division ${div.name}?`,
-                            onConfirm: async () => {
-                              try {
-                                await deleteDoc(doc(db, 'divisions', div.divisionId));
-                                setSuccess('Division deleted successfully');
-                                fetchData();
-                              } catch (err) {
-                                setError('Failed to delete division');
-                              }
-                              setConfirmModal(prev => ({ ...prev, show: false }));
-                            }
-                          });
-                        }} className="text-gray-400 hover:text-red-500 transition-colors">
+                        <button onClick={() => setDeleteDivisionModal({ show: true, division: div })} className="text-gray-400 hover:text-red-500 transition-colors">
                           <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
@@ -1188,12 +1292,20 @@ export const Management: React.FC = () => {
                     </div>
                   </div>
                   {student.status !== 'terminated' && (
-                    <button
-                      onClick={() => setStudentActionModal({ show: true, student, action: 'terminate' })}
-                      className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors"
-                    >
-                      Terminate
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setStudentActionModal({ show: true, student, action: 'edit' })}
+                        className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => setStudentActionModal({ show: true, student, action: 'terminate' })}
+                        className="text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors"
+                      >
+                        Terminate
+                      </button>
+                    </div>
                   )}
                 </div>
               ))}
@@ -1301,7 +1413,7 @@ export const Management: React.FC = () => {
       )}
 
       {/* Student Action Modal */}
-      {studentActionModal.show && studentActionModal.student && (
+      {studentActionModal.show && studentActionModal.student && studentActionModal.action !== 'edit' && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in duration-200">
             <h3 className="text-xl font-bold text-gray-900 mb-4">
@@ -1328,6 +1440,55 @@ export const Management: React.FC = () => {
                 <button type="submit" className="flex-1 px-4 py-2.5 rounded-xl font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-lg shadow-blue-200">Confirm</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {studentActionModal.show && studentActionModal.student && studentActionModal.action === 'edit' && (
+        <EditStudentModal
+            student={studentActionModal.student}
+            classes={classes}
+            divisions={divisions}
+            onClose={() => setStudentActionModal({ show: false, student: null, action: null })}
+            onSave={() => {
+                fetchData();
+                setStudentActionModal({ show: false, student: null, action: null });
+            }}
+        />
+      )}
+
+      {/* Delete Division Modal */}
+      {deleteDivisionModal.show && deleteDivisionModal.division && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in zoom-in duration-200">
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Delete Division '{deleteDivisionModal.division.name}'</h3>
+            <p className="text-gray-600 mb-6 italic">Select how you want to delete this division:</p>
+            <div className="space-y-3">
+              <button 
+                onClick={() => handleDeleteDivision(deleteDivisionModal.division!, 'thisYear')}
+                className="w-full text-left p-4 rounded-xl border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all font-medium text-gray-700"
+              >
+                Delete only for this academic year ({academicYear})
+              </button>
+              <button 
+                onClick={() => handleDeleteDivision(deleteDivisionModal.division!, 'thisYearForward')}
+                className="w-full text-left p-4 rounded-xl border border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition-all font-medium text-gray-700"
+              >
+                Delete this year and forward
+              </button>
+              <button 
+                onClick={() => handleDeleteDivision(deleteDivisionModal.division!, 'allYears')}
+                className="w-full text-left p-4 rounded-xl border border-gray-200 hover:border-red-500 hover:bg-red-50 transition-all font-medium text-red-700"
+              >
+                Delete on ALL academic years
+              </button>
+            </div>
+            <button 
+              onClick={() => setDeleteDivisionModal({ show: false, division: null })}
+              className="mt-6 w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-gray-700"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

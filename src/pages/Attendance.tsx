@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, where, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { useAcademicYear } from '../contexts/AcademicYearContext';
-import { Student, Class, Division, Attendance, AttendanceRecord, Holiday } from '../types';
+import { useAcademicYear, CURRENT_ACADEMIC_YEAR } from '../contexts/AcademicYearContext';
+import { Student, Class, Division, Attendance, AttendanceRecord, Holiday, AcademicYearConfig } from '../types';
 import { CheckCircle2, XCircle, Clock, FileText, Save, ChevronRight, Users, Calendar, X, AlertCircle } from 'lucide-react';
 import { format, isSunday, isSaturday, parseISO } from 'date-fns';
 import { AttendanceCalendar } from '../components/AttendanceCalendar';
@@ -70,18 +70,32 @@ export const AttendancePage: React.FC = () => {
       try {
         const schoolId = appUser.schoolId;
 
-        // 1. Fetch Classes
+        // 1. Fetch AcademicYearConfigs
+        const configsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('academicYear', '==', academicYear)));
+        const configs = configsSnap.docs.map(doc => doc.data() as AcademicYearConfig);
+        
+        // 2. Fetch Classes
         const classesSnap = await getDocs(query(collection(db, 'classes'), where('schoolId', '==', schoolId)));
-        const classesData = classesSnap.docs.map(doc => doc.data() as Class);
+        const classesDataRaw = classesSnap.docs.map(doc => doc.data() as Class);
+        
+        const classesData = classesDataRaw.map(cls => {
+          const config = configs.find(c => c.classId === cls.classId && !c.divisionId);
+          return { ...cls, startDate: config?.startDate || cls.startDate };
+        });
         setClasses(classesData);
 
-        // 2. Fetch Divisions (assigned to this teacher if role is teacher)
+        // 3. Fetch Divisions
         let divisionsQuery = query(collection(db, 'divisions'), where('schoolId', '==', schoolId));
-        if (appUser.role === 'teacher') {
-          divisionsQuery = query(divisionsQuery, where('teacherId', '==', appUser.uid));
-        }
         const divisionsSnap = await getDocs(divisionsQuery);
-        const divisionsData = divisionsSnap.docs.map(doc => doc.data() as Division);
+        let divisionsData = divisionsSnap.docs.map(doc => doc.data() as Division);
+        
+        // Filter divisions by configs (and optionally teacherId)
+        divisionsData = divisionsData.filter(d => {
+            const config = configs.find(c => c.divisionId === d.divisionId);
+            if (!config) return false;
+            if (appUser.role === 'teacher' && config.teacherId !== appUser.uid) return false;
+            return true;
+        });
         setDivisions(divisionsData);
 
         if (divisionsData.length > 0) {
@@ -95,7 +109,7 @@ export const AttendancePage: React.FC = () => {
     };
 
     fetchData();
-  }, [appUser]);
+  }, [appUser, academicYear]);
 
   useEffect(() => {
     if (!selectedDivision || !selectedDate) return;
@@ -112,9 +126,7 @@ export const AttendancePage: React.FC = () => {
         const [studentsSnap, attendanceSnap, allHolidaysSnap, todayHolidaySnap] = await Promise.all([
           getDocs(query(
             collection(db, 'students'),
-            where('schoolId', '==', schoolId),
-            where('divisionId', '==', selectedDivision),
-            where('status', '==', 'active')
+            where('schoolId', '==', schoolId)
           )),
           getDocs(query(
             collection(db, 'attendance'),
@@ -130,7 +142,23 @@ export const AttendancePage: React.FC = () => {
           ))
         ]);
 
-        const studentsData = studentsSnap.docs.map(doc => doc.data() as Student);
+        let studentsData = studentsSnap.docs.map(doc => doc.data() as Student);
+        
+        // Filter students based on academic year and division
+        const [startYear, endYear] = academicYear.split('-').map(Number);
+        const startOfAcademicYear = new Date(startYear, 5, 1);
+        const endOfAcademicYear = new Date(endYear, 4, 31);
+        
+        studentsData = studentsData.filter(student => {
+          const sortedHistory = [...(student.classHistory || [])].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+          const history = sortedHistory.find(h => {
+            const startDate = new Date(h.startDate);
+            const endDate = h.endDate ? new Date(h.endDate) : new Date(2099, 11, 31);
+            return startDate <= endOfAcademicYear && endDate >= startOfAcademicYear && h.divisionId === selectedDivision;
+          });
+          return !!history;
+        });
+        
         setStudents([...studentsData].sort((a, b) => a.name.localeCompare(b.name)));
         setAllHolidays(allHolidaysSnap.docs.map(doc => doc.data() as Holiday));
         
@@ -187,7 +215,7 @@ export const AttendancePage: React.FC = () => {
     };
 
     fetchStudentsAndAttendance();
-  }, [selectedDivision, selectedDate, appUser]);
+  }, [selectedDivision, selectedDate, appUser, academicYear]);
 
   const handleStatusChange = (studentId: string, status: AttendanceRecord['status']) => {
     setAttendanceRecords(prev => ({

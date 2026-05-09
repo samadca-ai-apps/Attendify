@@ -3,7 +3,7 @@ import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
-import { Class, Division, Attendance, Student, Holiday } from '../types';
+import { Class, Division, Attendance, Student, Holiday, AcademicYearConfig } from '../types';
 import { FileText, Download, Calendar, Filter, ChevronRight, AlertCircle, CheckCircle2, FileDown } from 'lucide-react';
 import Papa from 'papaparse';
 import { format, startOfMonth, parse } from 'date-fns';
@@ -29,13 +29,19 @@ export const Reports: React.FC = () => {
     const fetchData = async () => {
       try {
         const schoolId = appUser.schoolId;
-        const [classesSnap, divisionsSnap] = await Promise.all([
+        const [classesSnap, divisionsSnap, configsSnap] = await Promise.all([
           getDocs(query(collection(db, 'classes'), where('schoolId', '==', schoolId))),
-          getDocs(query(collection(db, 'divisions'), where('schoolId', '==', schoolId)))
+          getDocs(query(collection(db, 'divisions'), where('schoolId', '==', schoolId))),
+          getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('academicYear', '==', academicYear)))
         ]);
 
         setClasses(classesSnap.docs.map(doc => doc.data() as Class));
-        setDivisions(divisionsSnap.docs.map(doc => doc.data() as Division));
+        
+        const configs = configsSnap.docs.map(doc => doc.data() as AcademicYearConfig);
+        const divisionsData = divisionsSnap.docs
+            .map(doc => doc.data() as Division)
+            .filter(d => configs.some(c => c.divisionId === d.divisionId));
+        setDivisions(divisionsData);
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, 'reports_init');
       } finally {
