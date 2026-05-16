@@ -730,7 +730,7 @@ export const Management: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100 w-fit">
+      <div className="flex bg-white p-1 rounded-2xl shadow-sm border border-gray-100 overflow-x-auto max-w-full">
         {[
           { id: 'classes', label: 'Classes & Divisions', icon: BookOpen },
           { id: 'teachers', label: 'Teachers', icon: UserPlus },
@@ -741,7 +741,7 @@ export const Management: React.FC = () => {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+            className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 shrink-0 ${
               activeTab === tab.id
                 ? 'bg-blue-600 text-white shadow-lg shadow-blue-200'
                 : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50'
