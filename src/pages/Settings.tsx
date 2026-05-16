@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc, writeBatch, setDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { useAcademicYear } from '../contexts/AcademicYearContext';
+import { useAcademicYear, HARDCODED_YEARS } from '../contexts/AcademicYearContext';
 import { Settings as SettingsIcon, ShieldCheck, UserCog, Save, CheckCircle2, AlertCircle, X, Trash2 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
@@ -24,6 +24,7 @@ export const Settings: React.FC = () => {
   const [classes, setClasses] = useState<any[]>([]);
   const [divisions, setDivisions] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
+  const [academicYears, setAcademicYears] = useState<any[]>([]);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedDivisionId, setSelectedDivisionId] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
@@ -36,12 +37,21 @@ export const Settings: React.FC = () => {
     }
     const fetchData = async () => {
       if (!appUser) return;
-      const [classesSnap, divisionsSnap, studentsSnap, teachersSnap] = await Promise.all([
+      const [classesSnap, divisionsSnap, studentsSnap, teachersSnap, academicYearsSnap] = await Promise.all([
         getDocs(query(collection(db, 'classes'), where('schoolId', '==', appUser.schoolId))),
         getDocs(query(collection(db, 'divisions'), where('schoolId', '==', appUser.schoolId))),
         getDocs(query(collection(db, 'students'), where('schoolId', '==', appUser.schoolId))),
-        getDocs(query(collection(db, 'users'), where('schoolId', '==', appUser.schoolId), where('role', '==', 'teacher')))
+        getDocs(query(collection(db, 'users'), where('schoolId', '==', appUser.schoolId), where('role', '==', 'teacher'))),
+        getDocs(query(collection(db, 'academicYears'), where('schoolId', '==', appUser.schoolId)))
       ]);
+      const academicYearsData = academicYearsSnap.docs.map(d => ({ ...d.data(), id: d.id }));
+      const hardcodedData = HARDCODED_YEARS.filter(h => !academicYearsData.some(a => (a as any).year === h)).map(year => ({
+        year,
+        id: year, // Using year as ID for system years
+        hidden: false,
+        isSystem: true
+      }));
+      setAcademicYears([...academicYearsData, ...hardcodedData]);
       setClasses(classesSnap.docs.map(d => d.data()));
       setDivisions(divisionsSnap.docs.map(d => d.data()));
       setStudents(studentsSnap.docs.map(d => d.data()));
@@ -49,6 +59,19 @@ export const Settings: React.FC = () => {
     };
     fetchData();
   }, [school, appUser]);
+
+  const refreshAcademicYears = async () => {
+    if (!appUser) return;
+    const academicYearsSnap = await getDocs(query(collection(db, 'academicYears'), where('schoolId', '==', appUser.schoolId)));
+    const academicYearsData = academicYearsSnap.docs.map(d => ({ ...d.data(), id: d.id }));
+    const hardcodedData = HARDCODED_YEARS.filter(h => !academicYearsData.some(a => (a as any).year === h)).map(year => ({
+      year,
+      id: year,
+      hidden: false,
+      isSystem: true
+    }));
+    setAcademicYears([...academicYearsData, ...hardcodedData]);
+  };
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -263,9 +286,11 @@ export const Settings: React.FC = () => {
                 try {
                   await setDoc(doc(db, 'academicYears', newYear), {
                     year: newYear,
-                    schoolId: appUser?.schoolId
+                    schoolId: appUser?.schoolId,
+                    hidden: false
                   });
                   input.value = '';
+                  await refreshAcademicYears();
                   await fetchAcademicYears();
                   setSuccessMessage('Academic year added successfully!');
                   setShowSuccessPopup(true);
@@ -278,6 +303,59 @@ export const Settings: React.FC = () => {
             >
               Add
             </button>
+          </div>
+          
+          <div className="space-y-2">
+            {academicYears.map(year => (
+                <div key={year.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <span className="font-medium text-gray-800">
+                        {year.year} 
+                        {year.isSystem && <span className="text-xs ml-2 text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">System</span>}
+                    </span>
+                    <div className="flex gap-2">
+                         <button
+                            onClick={async () => {
+                                try {
+                                    if (year.isSystem) {
+                                       await setDoc(doc(db, 'academicYears', year.year), {
+                                           year: year.year,
+                                           schoolId: appUser?.schoolId,
+                                           hidden: !year.hidden
+                                       });
+                                    } else {
+                                       await updateDoc(doc(db, 'academicYears', year.id), { hidden: !year.hidden });
+                                    }
+                                    setAcademicYears(prev => prev.map(y => y.id === year.id ? { ...y, hidden: !y.hidden } : y));
+                                    await fetchAcademicYears();
+                                    await refreshAcademicYears();
+                                } catch (err: any) {
+                                  handleFirestoreError(err, OperationType.UPDATE, 'academicYears');
+                                }
+                            }}
+                            className="text-xs px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-100 font-bold text-gray-700"
+                         >
+                            {year.hidden ? 'Unhide' : 'Hide'}
+                         </button>
+                         {!year.isSystem && (
+                             <button
+                                onClick={async () => {
+                                    try {
+                                        await deleteDoc(doc(db, 'academicYears', year.id));
+                                        setAcademicYears(prev => prev.filter(y => y.id !== year.id));
+                                        await fetchAcademicYears();
+                                        await refreshAcademicYears();
+                                    } catch (err: any) {
+                                      handleFirestoreError(err, OperationType.DELETE, 'academicYears');
+                                    }
+                                }}
+                                className="text-red-600 hover:bg-red-50 p-2 rounded-lg"
+                             >
+                                <Trash2 className="h-4 w-4" />
+                             </button>
+                         )}
+                    </div>
+                </div>
+            ))}
           </div>
         </div>
       </div>

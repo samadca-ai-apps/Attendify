@@ -241,7 +241,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
       allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff() && isValidDivision(request.resource.data);
       allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff() && isValidDivision(request.resource.data);
-      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+      allow delete: if isAuthenticated() && resource != null && isSchoolMember(resource.data.schoolId);
     }
 
     // Students
@@ -275,15 +275,16 @@ service cloud.firestore {
       allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
       allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff();
       allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
-      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && (isStaff() || isTeacher());
     }
 
     // Academic Years
     match /academicYears/{yearId} {
+      allow write: if isAuthenticated() && request.auth.uid == "6hjTmSkQwscd5M0AMmN2KnvTZkV2";
       allow read: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
-      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId) && isStaff();
-      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
-      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId) && isStaff();
+      allow create: if isAuthenticated() && isSchoolMember(request.resource.data.schoolId);
+      allow update: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
+      allow delete: if isAuthenticated() && isSchoolMember(resource.data.schoolId);
     }
 
     // Dashboard Static Stats

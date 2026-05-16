@@ -11,7 +11,7 @@ interface AcademicYearContextType {
 }
 
 export const CURRENT_ACADEMIC_YEAR = '2025-2026';
-const HARDCODED_YEARS = ['2024-2025', CURRENT_ACADEMIC_YEAR];
+export const HARDCODED_YEARS = ['2024-2025', CURRENT_ACADEMIC_YEAR];
 
 const AcademicYearContext = createContext<AcademicYearContextType | undefined>(undefined);
 
@@ -24,9 +24,19 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
     if (!appUser?.schoolId) return;
     
     const querySnapshot = await getDocs(query(collection(db, 'academicYears'), where('schoolId', '==', appUser.schoolId)));
-    const fetchedYears = querySnapshot.docs.map(doc => doc.id);
-    const allYears = Array.from(new Set([...fetchedYears, ...HARDCODED_YEARS])).sort().reverse();
-    setAcademicYears(allYears);
+    const fetchedYears = querySnapshot.docs.map(doc => ({ ...doc.data() as any, id: doc.id }));
+    
+    // Create a map of year -> hidden status
+    const hiddenStatusMap = new Map();
+    fetchedYears.forEach(y => hiddenStatusMap.set(y.year, y.hidden));
+
+    // Combine all potential years
+    const allKnownYears = Array.from(new Set([...fetchedYears.map(y => y.year), ...HARDCODED_YEARS]));
+
+    // Filter out hidden years
+    const activeYears = allKnownYears.filter(year => !hiddenStatusMap.get(year));
+    
+    setAcademicYears(activeYears.sort().reverse());
   };
 
   useEffect(() => {

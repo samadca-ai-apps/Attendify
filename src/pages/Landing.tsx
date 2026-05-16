@@ -19,7 +19,8 @@ export const Landing: React.FC = () => {
     const password = formData.get('password') as string;
 
     try {
-      const loginEmail = `${loginId}@attendify.com`;
+      // If the input contains '@', treat it as an email, otherwise construct the teacher email
+      const loginEmail = loginId.includes('@') ? loginId : `${loginId}@attendify.com`;
       await signInWithEmailAndPassword(auth, loginEmail, password);
       navigate('/dashboard');
     } catch (err: any) {

@@ -196,6 +196,7 @@ export const Management: React.FC = () => {
     const name = formData.get('name') as string;
     const classId = formData.get('classId') as string;
     const teacherId = formData.get('teacherId') as string;
+    const scope = formData.get('scope') as 'thisYear' | 'allYears';
     if (!appUser || !name || !classId) return;
 
     try {
@@ -207,26 +208,43 @@ export const Management: React.FC = () => {
         name,
       });
 
-      const allConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', appUser.schoolId)));
-      const uniqueYears = Array.from(new Set(allConfigsSnap.docs.map(doc => (doc.data() as AcademicYearConfig).academicYear)));
-      const currentStartYear = parseInt(academicYear.split('-')[0]);
-
       const batch = writeBatch(db);
       
-      uniqueYears.forEach(year => {
-        const startYear = parseInt(year.split('-')[0]);
-        if (startYear >= currentStartYear) {
-            const configId = `${appUser.schoolId}_${year}_${divisionId}`;
-            batch.set(doc(db, 'academicYearConfigs', configId), {
-                configId,
-                schoolId: appUser.schoolId,
-                academicYear: year,
-                classId,
-                divisionId,
-                ...(teacherId ? { teacherId } : {})
-            });
-        }
-      });
+      if (scope === 'thisYear') {
+        const configId = `${appUser.schoolId}_${academicYear}_${divisionId}`;
+        batch.set(doc(db, 'academicYearConfigs', configId), {
+            configId,
+            schoolId: appUser.schoolId,
+            academicYear: academicYear,
+            classId,
+            divisionId,
+            ...(teacherId ? { teacherId } : {})
+        });
+      } else {
+          const allConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', appUser.schoolId)));
+          const uniqueYears = Array.from(new Set(allConfigsSnap.docs.map(doc => (doc.data() as AcademicYearConfig).academicYear)));
+          
+          if (!uniqueYears.includes(academicYear)) {
+              uniqueYears.push(academicYear);
+          }
+          const currentStartYear = parseInt(academicYear.split('-')[0]);
+
+          uniqueYears.forEach(year => {
+            const startYear = parseInt(year.split('-')[0]);
+            if (startYear >= currentStartYear) {
+                const configId = `${appUser.schoolId}_${year}_${divisionId}`;
+                batch.set(doc(db, 'academicYearConfigs', configId), {
+                    configId,
+                    schoolId: appUser.schoolId,
+                    academicYear: year,
+                    classId,
+                    divisionId,
+                    ...(teacherId ? { teacherId } : {})
+                });
+            }
+          });
+      }
+
       await batch.commit();
 
       setSuccess('Division added successfully!');
@@ -627,6 +645,7 @@ export const Management: React.FC = () => {
 
   const handleDeleteDivision = async (division: Division, option: 'thisYear' | 'thisYearForward' | 'allYears') => {
     setLoading(true);
+    setDivisions(prev => prev.filter(d => d.divisionId !== division.divisionId));
     try {
       const batch = writeBatch(db);
       const schoolId = appUser!.schoolId;
@@ -654,18 +673,21 @@ export const Management: React.FC = () => {
 
       await batch.commit();
 
-      // Check if any configs remain, if not, delete the division doc
-      const remainingConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('divisionId', '==', division.divisionId)));
-      if (remainingConfigsSnap.empty) {
-        await deleteDoc(doc(db, 'divisions', division.divisionId));
+      // Check if any configs remain, if not, delete the division doc.
+      // This is only necessary if the division itself wasn't already deleted in the batch (which only happens if 'allYears' option was chosen).
+      if (option !== 'allYears') {
+        const remainingConfigsSnap = await getDocs(query(collection(db, 'academicYearConfigs'), where('schoolId', '==', schoolId), where('divisionId', '==', division.divisionId)));
+        if (remainingConfigsSnap.empty) {
+          await deleteDoc(doc(db, 'divisions', division.divisionId));
+        }
       }
 
       setSuccess('Division deletion process completed.');
-      setDeleteDivisionModal({ show: false, division: null });
       fetchData();
     } catch (err: any) {
       handleFirestoreError(err, OperationType.DELETE, 'divisions');
     } finally {
+      setDeleteDivisionModal({ show: false, division: null });
       setLoading(false);
     }
   };
@@ -794,6 +816,16 @@ export const Management: React.FC = () => {
                     <option value="">Assign Teacher (Optional)</option>
                     {teachers.map(t => <option key={t.uid} value={t.uid}>{t.name}</option>)}
                   </select>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="scope" value="thisYear" defaultChecked className="text-blue-600" />
+                      <span className="text-sm text-gray-700">Selected Academic Year ({academicYear})</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="scope" value="allYears" className="text-blue-600" />
+                      <span className="text-sm text-gray-700">All Academic Years</span>
+                    </label>
+                  </div>
                   <button type="submit" className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
                     <Plus className="h-4 w-4" /> Add Division
                   </button>
