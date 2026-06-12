@@ -4,7 +4,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { auth } from '../firebase';
 import { LogOut, LayoutDashboard, ClipboardCheck, Settings, Menu, X, FileText, ShieldCheck, User, Key, Calendar } from 'lucide-react';
-import { CURRENT_ACADEMIC_YEAR } from '../contexts/AcademicYearContext';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { appUser, school } = useAuth();
@@ -14,18 +13,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (appUser && (appUser.role === 'teacher') && academicYear !== CURRENT_ACADEMIC_YEAR) {
-      setAcademicYear(CURRENT_ACADEMIC_YEAR);
-    }
-  }, [appUser, setAcademicYear, academicYear]);
-
-  useEffect(() => {
-    if (appUser && (appUser.role === 'admin' || appUser.role === 'it_coordinator')) {
-      setAcademicYear(CURRENT_ACADEMIC_YEAR);
-    }
-  }, [appUser, setAcademicYear]);
 
   // Determine if user can edit academic year
   const canEditAcademicYear = appUser?.role === 'admin' || appUser?.role === 'it_coordinator';

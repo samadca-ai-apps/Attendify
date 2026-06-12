@@ -20,7 +20,7 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   const [academicYears, setAcademicYears] = useState<string[]>(HARDCODED_YEARS);
   const { appUser } = useAuth();
 
-  const fetchAcademicYears = async () => {
+  const fetchAcademicYears = async (resetToLatest = false) => {
     if (!appUser?.schoolId) return;
     
     const querySnapshot = await getDocs(query(collection(db, 'academicYears'), where('schoolId', '==', appUser.schoolId)));
@@ -36,15 +36,26 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
     // Filter out hidden years
     const activeYears = allKnownYears.filter(year => !hiddenStatusMap.get(year));
     
-    setAcademicYears(activeYears.sort().reverse());
+    const sorted = activeYears.sort().reverse();
+    setAcademicYears(sorted);
+    
+    if (sorted.length > 0) {
+      if (resetToLatest) {
+        setAcademicYear(sorted[0]);
+      } else {
+        setAcademicYear(current => sorted.includes(current) ? current : sorted[0]);
+      }
+    }
   };
 
   useEffect(() => {
-    fetchAcademicYears();
+    if (appUser) {
+      fetchAcademicYears(true);
+    }
   }, [appUser]);
 
   return (
-    <AcademicYearContext.Provider value={{ academicYear, setAcademicYear, academicYears, fetchAcademicYears }}>
+    <AcademicYearContext.Provider value={{ academicYear, setAcademicYear, academicYears, fetchAcademicYears: () => fetchAcademicYears(false) }}>
       {children}
     </AcademicYearContext.Provider>
   );

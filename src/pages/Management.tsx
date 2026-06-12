@@ -14,7 +14,7 @@ import { EditStudentModal } from '../components/EditStudentModal';
 
 export const Management: React.FC = () => {
   const { appUser } = useAuth();
-  const { academicYear } = useAcademicYear();
+  const { academicYear, academicYears } = useAcademicYear();
   const [activeTab, setActiveTab] = useState<'classes' | 'teachers' | 'students' | 'promotion' | 'holidays'>('classes');
   const [loading, setLoading] = useState(true);
   const [classes, setClasses] = useState<Class[]>([]);
@@ -127,11 +127,12 @@ export const Management: React.FC = () => {
           return startDate <= endOfAcademicYear && endDate >= startOfAcademicYear;
         });
 
+        const currentLatestYear = academicYears[0] || CURRENT_ACADEMIC_YEAR;
         if (history) {
           displayClassId = history.classId;
           displayDivisionId = history.divisionId;
           isEnrolled = true;
-        } else if (academicYear === CURRENT_ACADEMIC_YEAR && student.status === 'active') {
+        } else if (academicYear === currentLatestYear && student.status === 'active') {
           isEnrolled = true;
         }
 
