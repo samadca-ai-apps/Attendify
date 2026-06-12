@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { auth } from '../firebase';
-import { LogOut, LayoutDashboard, ClipboardCheck, Settings, Menu, X, FileText, ShieldCheck, User, Key, Calendar } from 'lucide-react';
+import { LogOut, LayoutDashboard, ClipboardCheck, Settings, Menu, X, FileText, ShieldCheck, User, Key, Calendar, GraduationCap } from 'lucide-react';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { appUser, school } = useAuth();
@@ -35,6 +35,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const navItems = [
     { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['admin', 'it_coordinator', 'teacher'] },
     { label: 'Attendance', path: '/attendance', icon: ClipboardCheck, roles: ['admin', 'it_coordinator', 'teacher'] },
+    { label: 'Students', path: '/students', icon: GraduationCap, roles: ['admin', 'it_coordinator', 'teacher'] },
     { label: 'Management', path: '/management', icon: ShieldCheck, roles: ['admin', 'it_coordinator'] },
     { label: 'Reports', path: '/reports', icon: FileText, roles: ['admin', 'it_coordinator', 'teacher'] },
   ];

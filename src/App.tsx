@@ -15,6 +15,7 @@ import { Management } from './pages/Management';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { ChangePassword } from './pages/ChangePassword';
+import { StudentsPage } from './pages/Students';
 
 export default function App() {
   return (
@@ -66,6 +67,16 @@ export default function App() {
                   <AuthGuard allowedRoles={['admin', 'it_coordinator', 'teacher']}>
                     <Layout>
                       <Reports />
+                    </Layout>
+                  </AuthGuard>
+                }
+              />
+              <Route
+                path="/students"
+                element={
+                  <AuthGuard allowedRoles={['admin', 'it_coordinator', 'teacher']}>
+                    <Layout>
+                      <StudentsPage />
                     </Layout>
                   </AuthGuard>
                 }
