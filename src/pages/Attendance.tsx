@@ -150,6 +150,7 @@ export const AttendancePage: React.FC = () => {
         const endOfAcademicYear = new Date(endYear, 4, 31);
         
         studentsData = studentsData.filter(student => {
+          if (student.status === 'terminated') return false;
           const sortedHistory = [...(student.classHistory || [])].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
           const history = sortedHistory.find(h => {
             const startDate = new Date(h.startDate);
